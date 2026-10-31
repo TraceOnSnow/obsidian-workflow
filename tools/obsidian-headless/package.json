@@ -1,0 +1,9 @@
+{
+  "name": "personal-records-obsidian-sync-runtime",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Project-local official Obsidian Headless client; no global installation",
+  "dependencies": {
+    "obsidian-headless": "0.0.14"
+  }
+}

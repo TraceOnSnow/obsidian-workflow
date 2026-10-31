@@ -1,0 +1,10 @@
+[Unit]
+Description=Check the Markdown and website relationship every two minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+Unit=markdown-website-sync.service
+
+[Install]
+WantedBy=timers.target

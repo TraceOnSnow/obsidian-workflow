@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/kingbeyond/obsidian-super-table",
+  "commit": "18f1930b0ab0a8374d4271df70bf22af51e31b4b",
+  "tag": "1.1.2",
+  "plugin_id": "super-table",
+  "min_app_version": "1.13.0",
+  "license": "GPL-3.0-only",
+  "release": "https://github.com/kingbeyond/obsidian-super-table/releases/tag/1.1.2",
+  "assets": {
+    "main.js": {"size": 478522, "sha256": "e7ebf73816717b83b1b8366e10f2de557ebb7f0c4c9de82ef67f90fe5fb4d8cb"},
+    "manifest.json": {"size": 361, "sha256": "aff30ee9b066bbb0f83be60f0a319635af21e2b094f995e07e8af2b653913a41"},
+    "styles.css": {"size": 99558, "sha256": "43fd397edd60f77aaeafea413b551a233ebcb9c7e2445cc9409e2ab1cb233ac5"}
+  }
+}

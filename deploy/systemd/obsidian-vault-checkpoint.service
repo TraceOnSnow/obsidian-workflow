@@ -1,0 +1,13 @@
+[Unit]
+Description=Capture managed Markdown native edits in private revision history
+Documentation=file:%h/projects/obsidian-workflow/docs/reliability.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/projects/obsidian-workflow
+ExecStart=%h/projects/obsidian-workflow/.venv/bin/python %h/projects/obsidian-workflow/scripts/vault-backup.py checkpoint
+UMask=0077
+Nice=10
+TimeoutStartSec=10min
+StandardOutput=journal
+StandardError=journal

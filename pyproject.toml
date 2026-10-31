@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "markdown-library"
+version = "0.1.0"
+description = "Local, explicit Markdown library operations for Obsidian Vaults"
+requires-python = ">=3.11"
+dependencies = ["PyYAML>=6.0,<7"]
+
+[project.optional-dependencies]
+mcp = ["mcp==1.30.0"]
+
+[project.scripts]
+markdown-library = "markdown_library.cli:main"
+markdown-library-mcp = "markdown_library.mcp_server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

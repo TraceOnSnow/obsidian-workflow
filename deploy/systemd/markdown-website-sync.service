@@ -1,0 +1,13 @@
+[Unit]
+Description=Sync explicitly selected Markdown publications and receive safe Admin edits
+Documentation=file:%h/projects/obsidian-workflow/docs/website-sync.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/projects/obsidian-workflow
+ExecStart=/usr/bin/node %h/projects/obsidian-workflow/scripts/website-sync.mjs --apply --accept-remote
+UMask=0077
+TimeoutStartSec=5min
+StandardOutput=journal
+StandardError=journal

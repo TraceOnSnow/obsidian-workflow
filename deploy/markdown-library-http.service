@@ -1,0 +1,24 @@
+[Unit]
+Description=Authenticated private Markdown MCP over HTTPS reverse proxy
+Documentation=file:%h/projects/obsidian-workflow/docs/chatgpt-http-mcp.md
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/obsidian-workflow
+ExecStart=%h/projects/obsidian-workflow/.venv/bin/python -m markdown_library.mcp_http --config %h/projects/obsidian-workflow/runtime/library-http/config.json
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

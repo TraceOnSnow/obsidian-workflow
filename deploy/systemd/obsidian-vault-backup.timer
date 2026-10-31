@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily complete Vault backup, including missed runs after reboot
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=10min
+Persistent=true
+Unit=obsidian-vault-backup.service
+
+[Install]
+WantedBy=timers.target

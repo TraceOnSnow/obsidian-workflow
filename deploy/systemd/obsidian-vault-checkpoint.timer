@@ -1,0 +1,10 @@
+[Unit]
+Description=Observe managed Markdown native edits every fifteen minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=15min
+Unit=obsidian-vault-checkpoint.service
+
+[Install]
+WantedBy=timers.target

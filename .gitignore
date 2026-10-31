@@ -1,0 +1,30 @@
+# Personal material and local runtime
+samples/private/
+runtime/
+scratch/
+.env
+.env.*
+!.env.example
+.obsidian/
+
+# Only add dependencies if a concrete implementation needs them
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.markdown-library/
+node_modules/
+dist/
+build/
+tools/tunnel-client/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Private deployment records never belong to the public snapshot
+AGENTS.md
+HANDOFF.md
+PLAN.md
+docs/history/
+profiles/personal-*.json

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $# -gt 0 ]]; then
+  case "$1" in
+    login|logout|sync|sync-list-remote|sync-list-local|sync-create-remote|sync-setup|sync-config|sync-status|sync-unlink|help|--help|--version|-h|-V) ;;
+    *) printf '%s\n' 'This entry supports Obsidian Sync commands. Website publishing uses the separate Markdown library workflow.' >&2; exit 2 ;;
+  esac
+fi
+WORKFLOW_PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+exec node --import "$WORKFLOW_PROJECT_DIR/scripts/obsidian-api-transport.mjs" \
+  "$WORKFLOW_PROJECT_DIR/tools/obsidian-headless/node_modules/obsidian-headless/cli.js" "$@"

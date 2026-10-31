@@ -1,0 +1,11 @@
+[Unit]
+Description=Check new inbox notes every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=markdown-inbox-organize.service
+
+[Install]
+WantedBy=timers.target

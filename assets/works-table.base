@@ -1,0 +1,112 @@
+filters:
+  and:
+    - file.ext == "md"
+    - kind == "work"
+formulas:
+  work: 'file.asLink(if(title, title, file.name))'
+  experienceEnd: 'if(experiences, experiences.map(value.endedOn).filter(value).sort().reverse()[0], null)'
+  media: 'if(type == "game", "游戏", if(type == "anime", "动画", if(type == "book", "书籍", if(type == "movie", "电影", if(type == "tv", "剧集", if(type == "manga", "日漫", if(type == "comic", "漫画", if(type == "boardgame", "桌游", type))))))))'
+properties:
+  formula.experienceEnd:
+    displayName: 体验结束
+  formula.work:
+    displayName: 作品
+  note.rating:
+    displayName: 评分（百分制）
+  note.status:
+    displayName: 进度
+  note.note:
+    displayName: 短感受
+  formula.media:
+    displayName: 类型
+  file.mtime:
+    displayName: 修改时间
+views:
+  - type: table
+    name: 按体验结束
+    filters: '!formula.experienceEnd.isEmpty()'
+    order:
+      - formula.work
+      - formula.experienceEnd
+      - note.rating
+      - note.status
+      - note.note
+    sort:
+      - property: formula.experienceEnd
+        direction: DESC
+  - type: table
+    name: 全部作品
+    order:
+      - formula.work
+      - note.rating
+      - note.status
+      - note.note
+      - formula.media
+      - file.mtime
+    sort:
+      - property: note.title
+        direction: ASC
+    columnSize:
+      formula.work: 300
+      note.rating: 80
+      note.status: 130
+      note.note: 300
+      formula.media: 90
+      file.mtime: 160
+  - type: table
+    name: 进行中
+    filters: 'status == "in-progress"'
+    order:
+      - formula.work
+      - note.rating
+      - note.status
+      - note.note
+      - formula.media
+    sort:
+      - property: file.mtime
+        direction: DESC
+  - type: table
+    name: 待体验
+    filters: 'status == "planned"'
+    order:
+      - formula.work
+      - note.status
+      - note.note
+      - formula.media
+    sort:
+      - property: note.title
+        direction: ASC
+  - type: table
+    name: 已完成
+    filters: 'status == "completed"'
+    order:
+      - formula.work
+      - note.rating
+      - note.status
+      - note.note
+      - formula.media
+    sort:
+      - property: note.rating
+        direction: DESC
+  - type: table
+    name: 未评分
+    filters: rating.isEmpty()
+    order:
+      - formula.work
+      - note.rating
+      - note.status
+      - note.note
+      - formula.media
+  - type: table
+    name: 按类型
+    groupBy:
+      property: formula.media
+      direction: ASC
+    order:
+      - formula.work
+      - note.rating
+      - note.status
+      - note.note
+    sort:
+      - property: note.title
+        direction: ASC

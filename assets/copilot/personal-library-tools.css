@@ -1,0 +1,8 @@
+/* Copilot keeps its chats, prompts and skills at this path.
+   Hide only its File Explorer row and children, without excluding files from
+   the Vault API or changing Copilot's folder settings. Disable this snippet
+   in Settings > Appearance > CSS snippets to show the folder again. */
+.workspace-leaf-content[data-type="file-explorer"] .nav-folder-title[data-path="copilot"],
+.workspace-leaf-content[data-type="file-explorer"] .nav-folder-title[data-path="copilot"] + .nav-folder-children {
+  display: none !important;
+}

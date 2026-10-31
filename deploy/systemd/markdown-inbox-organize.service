@@ -1,0 +1,10 @@
+[Unit]
+Description=Organize new inbox notes with bounded optional Workspace semantic routing
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/example/projects/obsidian-workflow
+ExecStart=/home/example/projects/chatgpt-pipeline/.venv/bin/python /home/example/projects/obsidian-workflow/scripts/inbox-semantic-organize.py run --vault /home/example/projects/personal-records-vault --workspace /home/example/projects/chatgpt-pipeline/runtime/workbench --key-file /home/example/.hermes/.env --apply --semantic --max-new 4
+UMask=0077
+TimeoutStartSec=15min
+NoNewPrivileges=true
