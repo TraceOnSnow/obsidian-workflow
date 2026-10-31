@@ -2,7 +2,7 @@
 
 把普通 Markdown 笔记、作品记录和网站发表串成一条可检查的工作流。日常在 Obsidian 写作，Python CLI 管理稳定身份、来源和历史；需要发表时创建独立 Post，再通过标准 API 与 Payload 网站同步。
 
-这是个人使用项目的公开源码快照。仓库不包含真实笔记、聊天档案、账号、凭据、运行状态或第三方插件 bundle。
+这是持续维护的个人内容工作流工具。仓库不包含真实笔记、聊天档案、账号、凭据、运行状态或第三方插件 bundle。
 
 ## 做了什么
 
@@ -74,3 +74,7 @@ PYTHONPATH=src python -m unittest discover -s tests -q
 部分集成测试或工具需要额外运行环境，具体要求以测试和脚本为准；源码测试通过也不代表 Obsidian 本机 UI 或外部服务已经验收。
 
 相关项目：[历史材料整理管线](https://github.com/TraceOnSnow/chatgpt-pipeline)、[Payload 网站](https://github.com/TraceOnSnow/homepage)。本项目负责入库后的内容维护与同步；原始聊天档案、私人库和网站数据库分别保存。
+
+## 本地配置与协作
+
+代码直接在此仓库开发，通过标准 `git add`、`git commit`、`git push` 协作。真实数据、运行目录、凭据及本地部署说明由 `.gitignore` 排除；共享Skill可按需读取同目录的私有 `LOCAL.md`。个人资料不写入共享示例或默认配置。

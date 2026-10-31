@@ -22,9 +22,15 @@ tools/tunnel-client/
 .DS_Store
 Thumbs.db
 
-# Private deployment records never belong to the public snapshot
-AGENTS.md
-HANDOFF.md
-PLAN.md
-docs/history/
-profiles/personal-*.json
+# Local deployment notes and owner-specific settings
+/AGENTS.md
+/HANDOFF.md
+/PLAN.md
+/LOCAL.md
+**/LOCAL.md
+/docs/*
+/samples/
+/config/
+/assets/copilot/write-like-me/
+/profiles/*
+!/profiles/example.json
