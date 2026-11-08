@@ -47,6 +47,8 @@ markdown-library-mcp --vault "$demo_vault" --read-only
 
 普通保存只更新当前稿。`publish` 选择指定快照，之后的 `sync` 才负责与网站交互；`sync` 默认预览，实际应用需要 `--apply`。首次公开与 Post 发表应有明确授权。需要同步的目标必须实现本项目使用的 Payload 字段、草稿、版本和生命周期约定。
 
+私人 note 可通过 [`publish-article`](docs/article-publishing.md) 接收固定 JSON 请求，一次完成独立发表稿、限定同步、API 正式版核对和归档入口；支持离线预览，复用既有身份与冲突守卫，不调用模型或等待前台构建。当前 MCP 保持原内容操作边界；这一入口供本地 CLI 或 Python 工具调用。
+
 ```sh
 markdown-library --vault /absolute/path/to/vault sync --help
 markdown-library --vault /absolute/path/to/vault sync \

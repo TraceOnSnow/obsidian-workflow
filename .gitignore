@@ -29,6 +29,7 @@ Thumbs.db
 /LOCAL.md
 **/LOCAL.md
 /docs/*
+!/docs/article-publishing.md
 /samples/
 /config/
 /assets/copilot/write-like-me/

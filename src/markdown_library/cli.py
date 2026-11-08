@@ -70,6 +70,15 @@ def parser():
     missing_delete.add_argument("--expected-hash", required=True)
     missing_delete.add_argument("--apply", action="store_true")
     commands.add_parser("publications", help="Selected public snapshots, including withdrawal/delete intents")
+    article = commands.add_parser('publish-article', help='Preview or publish one private note as an independent Post; no frontend waiting')
+    article.add_argument('--schema', action='store_true', help='Return the JSON request schema without reading a Vault')
+    article.add_argument('--request', help='JSON request file, or - for stdin')
+    article.add_argument('--apply', action='store_true', help='Execute an explicitly authorized publication')
+    article.add_argument('--client-env-file', help='Explicit private dotenv configuration; parsed as data, never executed')
+    article.add_argument('--url')
+    article.add_argument('--api-key-env', default='HOMEPAGE_API_KEY')
+    article.add_argument('--timeout', type=float, default=20)
+    article.add_argument('--allow-loopback-http', action='store_true')
     sync = commands.add_parser("sync-plan", help="Offline plan from selected snapshots and explicit remote/baseline JSON files")
     sync.add_argument("--remote", required=True, help="Complete remote records JSON: {works: [...], posts: [...]}")
     sync.add_argument("--baseline", required=True, help="Baseline JSON keyed by library ID; use {} initially")
@@ -132,6 +141,21 @@ def parser():
 
 
 def dispatch(arguments):
+    if arguments.command == 'publish-article':
+        from .article_publish import REQUEST_SCHEMA, publish_article, client_settings
+        if arguments.schema:
+            if arguments.apply or arguments.request:
+                raise LibraryError('--schema cannot be combined with a request or apply')
+            return REQUEST_SCHEMA
+        if not arguments.request:
+            raise LibraryError('publish-article requires --request, or --schema')
+        request = json.loads(_read(arguments.request))
+        client = None
+        if arguments.apply:
+            from .transport import PayloadClient
+            url, key = client_settings(arguments.client_env_file, url=arguments.url, api_key_env=arguments.api_key_env)
+            client = PayloadClient(url, key, arguments.timeout, allow_loopback_http=arguments.allow_loopback_http)
+        return publish_article(Library(arguments.vault), request, client=client, apply=arguments.apply)
     if arguments.command == "init":
         library = Library.initialize(arguments.vault)
         return {"initialized": True, "vault": str(library.vault)}
@@ -247,6 +271,8 @@ def main(argv=None):
     try:
         output = dispatch(arguments)
         print(json.dumps(output, ensure_ascii=False, allow_nan=False))
+        if arguments.command == 'publish-article' and output.get('status') == 'needs_review':
+            return 2
         return 0
     except (LibraryError, OSError, ValueError, TypeError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
