@@ -20,8 +20,14 @@ from .transport import sync_once, _verify_both, _Store, _selected_unchanged
 REQUEST_SCHEMA = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "PublishArticleRequest", "type": "object", "additionalProperties": False,
-    "required": ["source_note_id", "expected_source_hash", "title", "published_at"],
+    "required": ["title"],
+    "oneOf": [
+        {"required": ["source_note_id", "expected_source_hash", "published_at"], "not": {"required": ["post_id"]}},
+        {"required": ["post_id", "expected_post_hash"], "not": {"anyOf": [
+            {"required": ["source_note_id"]}, {"required": ["expected_source_hash"]}]}},
+    ],
     "properties": {
+        "post_id": {"type": "string", "minLength": 1},
         "source_note_id": {"type": "string", "minLength": 1},
         "expected_source_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
         "expected_post_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
@@ -42,8 +48,14 @@ REQUEST_SCHEMA = {
 def validate_request(request):
     if not isinstance(request, dict) or set(request) - REQUEST_SCHEMA['properties'].keys():
         raise LibraryError('Article request must be an object with supported fields only')
-    if set(REQUEST_SCHEMA['required']) - request.keys():
-        raise LibraryError('Article request requires source_note_id, expected_source_hash, title and published_at')
+    if 'title' not in request or ('source_note_id' in request) == ('post_id' in request):
+        raise LibraryError('Article request requires title and exactly one of source_note_id or post_id')
+    required = ({'source_note_id', 'expected_source_hash', 'published_at'} if 'source_note_id' in request
+                else {'post_id', 'expected_post_hash'})
+    if required - request.keys():
+        raise LibraryError('Article request is missing its input hash or publication date')
+    if 'post_id' in request and 'expected_source_hash' in request:
+        raise LibraryError('Post updates use expected_post_hash, not a private source hash')
     for key, value in request.items():
         spec = REQUEST_SCHEMA['properties'][key]
         if spec['type'] == 'string':
@@ -62,12 +74,13 @@ def validate_request(request):
         raise LibraryError('Forbidden terms must be nonempty')
     if any(c in request['title'] for c in '\r\n'):
         raise LibraryError('Article title must be one line')
-    try:
-        moment = datetime.fromisoformat(request['published_at'].replace('Z', '+00:00'))
-        if moment.tzinfo is None or 'T' not in request['published_at']:
-            raise ValueError()
-    except ValueError:
-        raise LibraryError('published_at requires an ISO datetime with an explicit timezone') from None
+    if 'published_at' in request:
+        try:
+            moment = datetime.fromisoformat(request['published_at'].replace('Z', '+00:00'))
+            if moment.tzinfo is None or 'T' not in request['published_at']:
+                raise ValueError()
+        except ValueError:
+            raise LibraryError('published_at requires an ISO datetime with an explicit timezone') from None
 
 
 def client_settings(filename, *, url=None, api_key_env='HOMEPAGE_API_KEY'):
@@ -136,27 +149,47 @@ class _ApprovedClient:
 
 
 def _plan(library, request, state, notes):
-    source = library._required(notes, request['source_note_id'])
-    if source['properties']['kind'] != 'note':
-        raise LibraryError('publish-article requires a private note; Work reviews use prepare-work-review')
-    _guard(library, source, request['expected_source_hash'])
-    key = 'publication-copy:' + source['id']
-    candidates = {row['id'] for row in state['sources'].values()
-                  if any(row.get('source', {}).get(field) == source['id']
-                         for field in ('note_id', 'private_source_id', 'source_note_id'))}
-    if key in state['sources']:
-        candidates.add(state['sources'][key]['id'])
-    if len(candidates) > 1:
-        raise LibraryError('Multiple independent Posts refer to this source; resolve the relationship first')
-    post = library._required(notes, next(iter(candidates))) if candidates else None
+    source, key = None, None
+    if 'post_id' in request:
+        post = library._required(notes, request['post_id'])
+        try:
+            _guard(library, post, request['expected_post_hash'])
+        except LibraryError:
+            # A prior call may have saved the exact requested edit before a
+            # network timeout. Permit reconciliation, never an unrelated edit.
+            retained = library._path('.markdown-library/objects/' + request['expected_post_hash'] + '.md')
+            if not retained.is_file() or _hash(original := retained.read_text()) != request['expected_post_hash']:
+                raise
+            properties, _ = _split(original)
+            old = {**post, 'markdown': original, 'sha256': request['expected_post_hash'], 'properties': properties}
+            planned = _plan(library, request, state, {**notes, post['id']: old})
+            if strip(_render(planned['properties'], planned['body'])) != strip(post['markdown']):
+                raise LibraryError('Post changed beyond the requested edit; read the current draft again')
+            return {**planned, 'post': post, 'changed': False}
+    else:
+        source = library._required(notes, request['source_note_id'])
+        if source['properties']['kind'] != 'note':
+            raise LibraryError('Private source must be a note; Work reviews use prepare-work-review')
+        _guard(library, source, request['expected_source_hash'])
+        key = 'publication-copy:' + source['id']
+        candidates = {row['id'] for row in state['sources'].values()
+                      if any(row.get('source', {}).get(field) == source['id']
+                             for field in ('note_id', 'private_source_id', 'source_note_id'))}
+        if key in state['sources']:
+            candidates.add(state['sources'][key]['id'])
+        if len(candidates) > 1:
+            raise LibraryError('Multiple independent Posts refer to this source; resolve the relationship first')
+        post = library._required(notes, next(iter(candidates))) if candidates else None
     if post and post['properties']['kind'] != 'post':
         raise LibraryError('Publication source must refer to an existing Post')
     properties = deepcopy(post['properties']) if post else {}
-    properties.update({'title': request['title'], 'publishedAt': request['published_at']})
+    properties['title'] = request['title']
+    if 'published_at' in request:
+        properties['publishedAt'] = request['published_at']
     for field in ('link', 'locale', 'description', 'categories', 'tags'):
         if field in request:
             properties[field] = deepcopy(request[field])
-    properties.setdefault('link', 'article-' + source['id'])
+    properties.setdefault('link', 'article-' + (source or post)['id'])
     properties.setdefault('locale', 'zh')
     theme = properties.get('frontmatter') or {}
     if not isinstance(theme, dict):
@@ -165,7 +198,7 @@ def _plan(library, request, state, notes):
         raise LibraryError('Protected Posts require a supported deliberate publication flow')
     if set(theme) - PUBLIC_THEME_FIELDS:
         raise LibraryError('Unsupported Post theme options require explicit review')
-    body = strip(request.get('public_markdown', _split(source['markdown'])[1]))
+    body = strip(request.get('public_markdown', _split((source or post)['markdown'])[1]))
     if body.startswith('---\n') or body.startswith('---\r\n'):
         raise LibraryError('public_markdown must be a body, without frontmatter')
     replacements = request.get('replacements', {})
@@ -211,18 +244,28 @@ def _finish(library, source_id, post_id, url):
         else:
             writes, updated = [], {}
         view = {**notes, **updated}
-        source, post = view[source_id], view[post_id]
+        post = view[post_id]
         def link(note, label):
             return _wiki(note).rsplit('|', 1)[0] + '|' + label + ']]'
-        entries = {source_id: '已发表 · [网站文章](' + url + ') · ' + link(post, '发表稿')}
+        entries = {}
         # Retain all proven original-source backlinks of an existing Post.
-        originals = {source_id}
+        originals = {source_id} if source_id else set()
         for row in state['sources'].values():
             if row['id'] == post_id:
                 originals.update(value for field in ('note_id', 'private_source_id', 'source_note_id', 'work_id')
                                  if (value := row.get('source', {}).get(field)) in view)
-        entries[post_id] = '已发表 · [网站文章](' + url + ') · ' + ' · '.join(
-            link(view[key], '私人原稿') for key in sorted(originals))
+        for original_id in originals:
+            # Catalog-backed Works retain their separate relationship tool.
+            if view[original_id]['properties']['kind'] != 'note':
+                continue
+            other_posts = {row['id'] for row in state['sources'].values()
+                           if row['id'] != post_id and any(row.get('source', {}).get(field) == original_id
+                               for field in ('note_id', 'private_source_id', 'source_note_id'))}
+            if not other_posts:
+                entries[original_id] = '已发表 · [网站文章](' + url + ') · ' + link(post, '发表稿')
+        entries[post_id] = '已发表 · [网站文章](' + url + ')'
+        if originals:
+            entries[post_id] += ' · ' + ' · '.join(link(view[key], '私人原稿') for key in sorted(originals))
         for key, footer in entries.items():
             note = view[key]
             markdown = set_publication_navigation(note['markdown'], footer)
@@ -248,7 +291,7 @@ def publish_article(library, request, *, client=None, apply=False):
         state, notes = _index(library)
         plan = _plan(library, request, state, notes)
         post = plan['post']
-        return {'status': 'preview', 'remote_writes': False, 'source_note_id': request['source_note_id'],
+        return {'status': 'preview', 'remote_writes': False, 'source_note_id': request.get('source_note_id'),
                 'post_id': post['id'] if post else None,
                 'expected_post_hash': post['sha256'] if post else None,
                 'requires_post_hash': bool(post and plan['changed']),
@@ -285,7 +328,7 @@ def publish_article(library, request, *, client=None, apply=False):
                 library._remember(state, updated, 'article-prepared')
                 writes.append((post['path'], markdown, post['sha256']))
                 post = updated
-            if plan['key'] not in state['sources']:
+            if plan['key'] is not None and plan['key'] not in state['sources']:
                 state['sources'][plan['key']] = {'id': post['id'], 'source': {
                     'type': 'publication-copy', 'note_id': plan['source']['id'],
                     'source_sha256': plan['source']['sha256']}}
@@ -313,7 +356,7 @@ def publish_article(library, request, *, client=None, apply=False):
                   'remote_id': baseline['remote_id'], 'url': url, 'frontend': 'asynchronous',
                   'local_maintenance': 'complete'}
         try:
-            _finish(library, request['source_note_id'], post['id'], url)
+            _finish(library, request.get('source_note_id'), post['id'], url)
         except (LibraryError, OSError, ValueError, KeyError):
             # Remote publication cannot be rolled back by a local-link failure.
             answer['local_maintenance'] = 'needs_review'

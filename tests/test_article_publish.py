@@ -96,6 +96,39 @@ class ArticlePublishTests(unittest.TestCase):
         self.assertEqual(result['post_id'], post['id'])
         self.assertEqual(len(self.client.latest['posts']), 1)
 
+    def test_direct_post_title_update_preserves_published_body_date_url_and_private_edits(self):
+        first = self.call()
+        post = self.library.get(first['post_id'])
+        private = self.library.get(self.note['id'])
+        private = self.library.replace(private['id'], private['markdown'] + '\nPrivate new text', expected_hash=private['sha256'])
+        update = {'post_id': post['id'], 'expected_post_hash': post['sha256'], 'title': 'New public title'}
+        preview = publish_article(self.library, update)
+        self.assertNotIn('Private new text', preview['public_markdown'])
+        result = publish_article(self.library, update, client=self.client, apply=True)
+        self.assertEqual(result['post_id'], first['post_id'])
+        current = self.library.get(post['id'])
+        self.assertEqual(current['properties']['publishedAt'], post['properties']['publishedAt'])
+        self.assertEqual(current['properties']['link'], post['properties']['link'])
+        expected_body = strip(_split(post['markdown'])[1]).replace('# ' + self.request['title'], '# New public title', 1)
+        self.assertEqual(strip(_split(current['markdown'])[1]), expected_body)
+        self.assertEqual(strip(self.library.get(private['id'])['markdown']), strip(private['markdown']))
+        writes = len(self.client.mutations)
+        self.assertEqual(publish_article(self.library, update, client=self.client, apply=True)['status'], 'published')
+        self.assertEqual(len(self.client.mutations), writes)
+
+    def test_direct_post_update_without_private_source_and_with_concurrent_edits(self):
+        post = self.library.create('# Original\n\nPublic body', title='Original', kind='post', properties={'link': 'standalone'})
+        update = {'post_id': post['id'], 'expected_post_hash': post['sha256'], 'title': 'Changed'}
+        result = publish_article(self.library, update, client=self.client, apply=True)
+        self.assertEqual(result['local_maintenance'], 'complete')
+        current = self.library.get(post['id'])
+        self.assertNotIn('私人原稿', current['markdown'])
+        self.library.replace(current['id'], current['markdown'] + '\nIndependent draft', expected_hash=current['sha256'])
+        writes = len(self.client.mutations)
+        with self.assertRaises(LibraryError):
+            publish_article(self.library, update, client=self.client, apply=True)
+        self.assertEqual(len(self.client.mutations), writes)
+
     def test_source_concurrent_edit_is_not_overwritten_or_published(self):
         edited = self.library.replace(self.note['id'], self.note['markdown'] + 'New user edit', expected_hash=self.note['sha256'])
         with self.assertRaises(LibraryError):

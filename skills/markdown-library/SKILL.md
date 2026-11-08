@@ -30,6 +30,8 @@ Work 使用稳定 ID 连接作品总表、私人感想和网站资料。日常�
 
 私人 note 发表优先使用固定的 `publish-article` 工具，不逐次编写准备、同步、核验或归档脚本。先用 `publish-article --schema` 获取 JSON 参数结构，按批准稿填写；`--request FILE` 只读预览，明确授权后加 `--apply` 一次完成独立Post、限定同步、API核对及本地收尾。稳定来源和既有Post自动复用，已有Post改动须传其当前指纹。正文语义处理由Agent在请求中完成，确定词替换可交 `replacements`，敏感词复检可用 `forbidden_terms`。凭据由显式私密配置或环境变量提供。接口和返回语义见 [工具说明](../../docs/article-publishing.md)。
 
+修改已有文章同样用 `publish-article`，传 `post_id`、`expected_post_hash` 与所需改动。只改公开标题或属性时使用此模式，默认沿用 Post 正文、URL 和发表日期，避免把私人原稿的新内容带上网站。
+
 普通保存不表示发表。只有明确要求公开时，才用当前 SHA 选择 `publish` 快照，并按已配置目标执行同步。Work 卡片可公开字段与私人正文分开；Post 正文单独选版。匿名化、时间和公开范围以当前用户要求为准，不推断授权。
 
 `sync` 默认读取和预览，`--apply` 才执行；显式提供目标 URL 与命名 API-key 环境变量。双端修改比较共同基线，冲突使用 `sync-review`／`sync-resolve`，不手改隐藏状态选边。写入超时先对账，不重复新建；只有实际远端回读和需要的前台检查通过，才报告上线。
