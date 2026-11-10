@@ -144,12 +144,16 @@ class OverviewTests(unittest.TestCase):
             actual = (self.library.vault / before["path"]).read_text()
             self.assertEqual(strip_publication_navigation(actual), before["markdown"])
             self.assertEqual(actual.count("publication-nav:start"), 1)
-            self.assertIn(f"![[发布与同步状态#^publication-{self.post['id']}]]", actual)
+            footer = actual.split("<!-- markdown-library:publication-nav:start -->\n", 1)[1].split("\n<!-- markdown-library:publication-nav:end -->", 1)[0]
+            self.assertEqual(len(footer.splitlines()), 1)
+            self.assertNotIn("![[发布与同步状态", footer)
+            self.assertNotIn("两稿分别维护", footer)
         source_text = (self.library.vault / self.note["path"]).read_text()
-        self.assertIn("已有独立发表稿", source_text)
+        self.assertIn("已发表 · [网站文章]", source_text)
+        self.assertIn("|发表稿]]", source_text)
         self.assertNotIn("私人全文已公开", source_text)
         self.assertIn("私人原稿；已有独立发表稿", (self.library.vault / REPORT_PATH).read_text())
-        self.assertIn("私人原稿：主来源：", (self.library.vault / self.post["path"]).read_text())
+        self.assertIn("|私人原稿]]", (self.library.vault / self.post["path"]).read_text())
         self.assertEqual(self.library._read_state()["publications"], selected)
         self.assertEqual((self.library.private / "sync-state.json").read_bytes(), sync_bytes)
         before_files = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in self.library.vault.rglob("*") if p.is_file()}
@@ -190,14 +194,14 @@ class OverviewTests(unittest.TestCase):
         publication_overview(self.library, self.review(), apply=True)
         actual = (self.library.vault / self.post["path"]).read_text()
         self.assertLess(actual.index(self.note["path"].removesuffix(".md")), actual.index(other["path"].removesuffix(".md")))
-        self.assertIn("主来源：", actual)
+        self.assertIn("|私人原稿]]", actual)
         self.add_source({"type": "publication-copy", "note_id": other["id"]}, key="other-primary")
         publication_overview(self.library, self.review(), apply=True)
         actual = (self.library.vault / self.post["path"]).read_text()
         self.assertNotIn("主来源：", actual)
         for note in (self.note, other):
             self.assertIn(note["path"].removesuffix(".md"), actual)
-            self.assertIn("已有独立发表稿", (self.library.vault / note["path"]).read_text())
+            self.assertIn("|发表稿]]", (self.library.vault / note["path"]).read_text())
 
     def test_retained_work_article_proves_private_work_source(self):
         state = self.library._read_state()
@@ -207,7 +211,7 @@ class OverviewTests(unittest.TestCase):
         work = (self.library.vault / self.work["path"]).read_text()
         post = (self.library.vault / self.post["path"]).read_text()
         self.assertEqual(strip_publication_navigation(work), self.work["markdown"])
-        self.assertIn("已有独立发表稿", work)
+        self.assertIn("|发表稿]]", work)
         self.assertIn(self.work["path"].removesuffix(".md"), post)
         self.assertNotIn("Private body", (self.library.vault / REPORT_PATH).read_text())
 

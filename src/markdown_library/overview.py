@@ -166,6 +166,9 @@ def _article_navigation(library, state, notes, items, sync_state):
                           "properties": {"kind": "post", "title": selected.get("title") or record.get("path") or key}}
     sources = _post_sources(library, state, notes, posts, sync_state)
     rows, blocks, footers, reverse = [], [], {}, {}
+    def entry(note, label):
+        link = _wiki(note)
+        return link.rsplit("|", 1)[0] + "|" + label + "]]" if "|" in link else link[:-2] + "|" + label + "]]"
     for post in sorted(posts.values(), key=lambda row: (row["properties"]["title"].casefold(), row["id"])):
         post_id = post["id"]
         item, record = items.get(post_id), state["notes"].get(post_id, {})
@@ -184,18 +187,24 @@ def _article_navigation(library, state, notes, items, sync_state):
         post_link = _wiki(post) if post_id in notes else f"已回收／缺失：{_label(post['path'])}"
         rows.append(f"| {_label(post['properties']['title'])} | {status} | {web} | {post_link.replace('|', chr(92) + '|')} | {source_text.replace('|', chr(92) + '|')} | {edits} |")
         blocks.append(f"{_label(post['properties']['title'])}：{status}；{web}；发表稿：{post_link}；私人原稿：{source_text}；Post未发布改动：{edits}。 ^publication-{post_id}")
-        footer = f"> [!info] 发表信息\n> ![[发布与同步状态#^publication-{post_id}]]"
-        if links:
-            footer += "\n> 私人原稿：" + "；".join(links)
+        navigation = ["已发表" if public else status]
+        if url:
+            navigation.append(f"[网站文章]({url})")
+        navigation.extend(entry(notes[key], "私人原稿") for key in source_ids)
+        footer = " · ".join(navigation)
         if post_id in notes:
             footers[post_id] = footer
         for source_id in source_ids:
-            reverse.setdefault(source_id, []).append((post_id, post))
+            reverse.setdefault(source_id, []).append((post_id, post, public, status, url))
     for source_id, related in reverse.items():
-        lines = ["> [!info] 发表信息", "> 已有独立发表稿；两稿分别维护，后续修改需另行发表。"]
-        for post_id, post in related:
-            lines += [f"> ![[发布与同步状态#^publication-{post_id}]]", "> 发表稿：" + _wiki(post)]
-        footers[source_id] = "\n".join(lines)
+        entries = []
+        for post_id, post, public, status, url in related:
+            navigation = ["已发表" if public else status]
+            if url:
+                navigation.append(f"[网站文章]({url})")
+            navigation.append(entry(post, "发表稿") if post_id in notes else "发表稿已回收")
+            entries.append(" · ".join(navigation))
+        footers[source_id] = "；".join(entries)
     lines = ["## 文章发表", "", "状态来自网站正式版本的API回读；静态页面更新可能稍后完成。私人原稿与独立发表稿分别维护。", "",
              "| 文章 | 网站正式状态 | 文章链接 | 发表稿路径 | 明确的私人原稿 | Post未发布改动 |", "| --- | --- | --- | --- | --- | --- |", *(rows or ["| 暂无文章 | | | | | |"]), "",
              "## 逐篇发表状态", ""]
