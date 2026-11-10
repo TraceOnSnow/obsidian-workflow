@@ -595,7 +595,10 @@ def map_imported(library, client, note_ids, *, apply=False):
                 observed_imported_baseline(publication, base)
                 baseline.update({"imported_sha256": note["sha256"], "bootstrap_source_id": key,
                                  "imported_source_hash": source_hash})
-                library._assert_note_storage(note)
+                try:
+                    library._assert_note_storage(note)
+                except LibraryError as exc:
+                    raise TransportError("Local current draft changed while observing the remote") from exc
                 if apply:
                     state["baselines"][note_id] = baseline
                     state["reverse_imports"].pop(note_id, None)
