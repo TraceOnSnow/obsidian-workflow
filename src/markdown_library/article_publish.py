@@ -235,10 +235,10 @@ def _finish(library, source_id, post_id, url):
         state = library._load()
         notes = library._scan(state)
         post = library._required(notes, post_id)
-        destination = '90_归档/已发表文章/' + post['path'].rsplit('/', 1)[-1]
+        destination = '发表稿/' + post['path'].rsplit('/', 1)[-1]
         if post['path'] != destination:
             if library._path(destination).exists():
-                raise LibraryError('Article archive destination is occupied')
+                raise LibraryError('Article publication folder destination is occupied')
             actions = LibraryActions(library)
             writes, updated, _ = actions._changes(state, notes, actions._files(notes), {post['path']: destination})
         else:

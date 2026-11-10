@@ -84,6 +84,78 @@ def install(vault, outputs):
 
 
 class NavigationTests(unittest.TestCase):
+    def test_idea_pool_has_a_separate_live_directory_from_raw_inbox(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            vault = Path(temporary) / 'vault'
+            library = Library.initialize(vault)
+            library.create('A recognized seed', title='Seed', path='05_想法池/Seed.md')
+            library.create('Unreviewed material', title='Raw', path='00_收件箱/Raw.md')
+            outputs = navigation.generate(vault, [])
+            install(vault, outputs)
+            base = '05_想法池/实时目录.base'
+            self.assertEqual(evaluate_bases(vault, [base])[base], ['05_想法池/Seed.md'])
+            self.assertIn('05_想法池/索引', outputs['首页.md'])
+            self.assertIn('05_想法池/索引', outputs['笔记目录.md'])
+
+    def test_generated_empty_category_retires_but_manual_index_remains(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            vault = Path(temporary) / 'vault'
+            Library.initialize(vault)
+            generated = vault / '20_项目与构想/Old draft'
+            generated.mkdir(parents=True)
+            (generated / '索引.md').write_text(navigation.MARKER + '\n# Old draft\n')
+            (generated / '实时目录.base').write_text(navigation.native_base())
+            manual = vault / '20_项目与构想/Manual guide'
+            manual.mkdir(parents=True)
+            (manual / '索引.md').write_text('# My maintained project guide\n')
+            outputs = navigation.generate(vault, [])
+            self.assertNotIn('20_项目与构想/Old draft/索引.md', outputs)
+            self.assertIn('20_项目与构想/Manual guide/索引.md', outputs)
+
+    def test_curated_topic_links_survive_refresh_but_inbox_entrances_do_not(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            vault = Path(temporary) / 'vault'
+            Library.initialize(vault)
+            folder = vault / '20_项目与构想/Project'
+            folder.mkdir(parents=True)
+            (folder / 'Practice.md').write_text('# Completed practice\n')
+            (folder / 'Other.md').write_text('# Another completed record\n')
+            (vault / '00_收件箱').mkdir(exist_ok=True)
+            (vault / '00_收件箱/Draft.md').write_text('# Pending draft\n')
+            (folder / '索引.md').write_text(navigation.MARKER + '\n## 从这里开始读\n\n'
+                '- [[20_项目与构想/Project/Other|Z first by choice]]\n'
+                '- [[20_项目与构想/Project/Practice|Curated practice]]\n'
+                '- [[00_收件箱/Draft|Pending draft]]\n\n## 实时目录\n')
+            outputs = navigation.generate(vault, [])
+            index = outputs['20_项目与构想/Project/索引.md']
+            self.assertIn('Project/Practice|Curated practice', index)
+            self.assertNotIn('00_收件箱/Draft', index)
+            self.assertLess(index.index('Z first by choice'), index.index('Curated practice'))
+
+    def test_topic_refresh_preserves_curated_home_and_excludes_claude_adapter(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            vault = Path(temporary) / 'vault'
+            library = Library.initialize(vault)
+            first = navigation.generate(vault, [])
+            install(vault, first)
+            home = vault / '首页.md'
+            curated = home.read_text() + '\nMy chosen reading route\n'
+            home.write_text(curated)
+            (vault / 'CLAUDE.md').write_text('@AGENTS.md\n')
+            (vault / 'Ordinary.md').write_text('An ordinary new note')
+            next_outputs = navigation.generate(vault, [])
+            self.assertEqual(next_outputs['首页.md'], curated)
+            # Existing user layouts stay untouched; evaluate the fresh filter
+            # contract separately from installing it into an existing Base.
+            (vault / navigation.INBOX_BASE).write_text(navigation.native_base(navigation.topic_scope('00_收件箱'), inbox=True))
+            members = evaluate_bases(vault, [navigation.INBOX_BASE])[navigation.INBOX_BASE]
+            self.assertIn('Ordinary.md', members)
+            self.assertNotIn('CLAUDE.md', members)
+            draft = vault / '00_收件箱/Draft route.md'
+            draft.write_text('---\ntags: [主题导航]\n---\n# An unreviewed reading route\n')
+            _, maps = navigation.discover(vault, [])
+            self.assertNotIn('00_收件箱/Draft route.md', maps)
+
     def test_migrated_catalog_navigation_keeps_table_and_other_bases(self):
         from markdown_library.catalog_migration import migrate_work_catalog, BASE_ARCHIVE
         from markdown_library.work_catalog import DEFAULT_PATH, parse_catalog, build_catalog
@@ -363,13 +435,10 @@ class NavigationTests(unittest.TestCase):
             members = evaluate_bases(vault, [base], include_views=True)
             self.assertEqual(members[f'{base}#全部文章'],
                              ['90_归档/已发表文章/Archived.md', '发表稿/Draft.md'])
-            self.assertEqual(members[f'{base}#待写稿'], ['发表稿/Draft.md'])
-            self.assertEqual(members[f'{base}#已发表存档'], ['90_归档/已发表文章/Archived.md'])
+            self.assertNotIn(f'{base}#待写稿', members)
+            self.assertNotIn(f'{base}#已发表存档', members)
             index = outputs['发表稿/索引.md']
             self.assertLess(index.index('![[发布与同步状态#文章发表]]'), index.index(f'![[{base}]]'))
-            self.assertIn('实际是否已发表以上方网站观察为准', index)
-            self.assertIn('各自修改，互不自动覆盖', index)
-            self.assertIn('不会撤回网站', index)
 
             custom_base = ('filters: kind == "post"\ncustomSetting: retained\nviews:\n'
                            '- type: table\n  name: My article layout\n  columnSize:\n'

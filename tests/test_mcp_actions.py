@@ -35,6 +35,17 @@ class LibraryActionTests(unittest.TestCase):
     def hashes(self, *notes):
         return {note["id"]: note["sha256"] for note in notes}
 
+    def test_recognized_idea_moves_between_pool_and_project_with_stable_identity(self):
+        note = self.note('notes/Idea.md', body='# A recognized idea\n')
+        self.write('notes/Reference.md', '[[notes/Idea|Idea]]\n')
+        pooled = self.actions.move(note['id'], '05_想法池/Idea.md', note['sha256'])
+        self.assertEqual(self.library.get(note['id'])['path'], '05_想法池/Idea.md')
+        self.assertIn('05_想法池/Idea|Idea', self.read('notes/Reference.md'))
+        advanced = self.actions.move(note['id'], '20_项目与构想/Idea.md', pooled['sha256'])
+        self.assertEqual(advanced['id'], note['id'])
+        self.assertIn('20_项目与构想/Idea|Idea', self.read('notes/Reference.md'))
+        self.assertFalse(self.state()['publications'])
+
     def merged(self, target, body="merged body\n"):
         original_body = _split(target["markdown"])[1]
         return target["markdown"][:-len(original_body)] + body

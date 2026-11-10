@@ -16,13 +16,13 @@ from markdown_library.bootstrap import _index
 
 MARKER = '<!-- markdown-library:topic-navigation:v1 -->'
 BASE_MARKER = '# markdown-library:topic-base:v1; installed once, user editable'
-ROOTS = ['00_收件箱', '10_个人记录', '20_项目与构想', '30_知识与参考', '90_归档']
+ROOTS = ['00_收件箱', '05_想法池', '10_个人记录', '20_项目与构想', '30_知识与参考', '90_归档']
 BASE_NAME = '实时目录.base'
 INBOX_BASE = '00_收件箱/待整理（实时）.base'
 ALL_BASE = '全部笔记.base'
 RESERVED_ROOTS = {'works', '发表稿', 'posts', 'notes', 'copilot', 'assets', 'config', 'templates'}
 UTILITY_NAMES = ('索引', '首页', '笔记目录', '网站内容', '发布与同步状态', '使用说明',
-                 'Copilot库内助手', 'AGENTS', 'HANDOFF', 'PLAN', 'README', 'SKILL')
+                 'Copilot库内助手', 'AGENTS', 'CLAUDE', 'HANDOFF', 'PLAN', 'README', 'SKILL')
 # Keep the existing article topic routes, evaluated live only for the posts
 # namespace. A post moved into a topic folder follows its physical destination.
 POST_ROUTES = [
@@ -115,7 +115,11 @@ def discover(vault, items):
             relative = path.relative_to(vault).as_posix()
             if name == '索引.md':
                 if path.parent != vault:
-                    parents.add(path.parent.relative_to(vault).as_posix())
+                    # An old generated index must not keep an otherwise empty
+                    # category alive after its drafts return to Inbox. A manual
+                    # index is content in its own right and remains discoverable.
+                    if not path.read_text(encoding='utf-8').startswith(MARKER):
+                        parents.add(path.parent.relative_to(vault).as_posix())
                 continue
             if path.stem in UTILITY_NAMES:
                 continue
@@ -132,7 +136,7 @@ def discover(vault, items):
             tags = properties.get('tags') or []
             if isinstance(tags, str):
                 tags = [tags]
-            if '主题导航' in tags:
+            if '主题导航' in tags and not relative.startswith(('00_收件箱/', 'notes/', '90_归档/')):
                 maps[relative] = properties.get('title') or path.stem
     for parent in list(parents):
         node = Path(parent)
@@ -158,43 +162,70 @@ def generate(vault, items):
         base = INBOX_BASE if parent == '00_收件箱' else parent + '/' + BASE_NAME
         lines = [MARKER, '# ' + Path(parent).name, '', '[[首页|首页]] · [[笔记目录|全部主题]]', '']
         if parent == '00_收件箱':
-            lines += ['新稿默认进入 `00_收件箱/`；收件箱或库根目录中的普通新稿会自动出现，确定主题后移动到相应文件夹。', '']
+            lines += ['这里保留仍需辨认、核对或梳理的材料。本人认领的初步想法可以进入想法池；完整成稿再归入主题目录，不把纯AI方案自动认领为本人想法。', '']
+        if parent == '05_想法池':
+            lines += ['这里保留已经认领、值得以后继续探索，但暂时不准备推进的想法。无需排期或补齐实现方案；想继续时再拿出来讨论。待核对材料仍在Inbox，完整文章和阶段设计留在主题目录。', '']
         if parent.startswith('90_归档'):
             lines += ['这里保留历史记录。文中的配置和操作描述属于当时背景，使用前核对当前环境。', '']
         children = [p for p in parents if str(Path(p).parent) == parent]
         lines += ['- ' + wiki(p + '/索引.md', Path(p).name) for p in children]
         if children:
             lines.append('')
-        featured = [(path, title) for path, title in maps.items() if str(Path(path).parent) == parent]
+        featured = {path: title for path, title in maps.items() if str(Path(path).parent) == parent}
+        curated = {}
+        # Retain manually chosen reading links (not just tagged map notes).
+        # Links into Inbox are working material, not formal reading entrances.
+        existing = vault / parent / '索引.md'
+        if existing.is_file():
+            current = existing.read_text(encoding='utf-8')
+            if current.startswith(MARKER) and '## 从这里开始读\n' in current:
+                section = current.split('## 从这里开始读\n', 1)[1].split('\n## ', 1)[0]
+                for line in section.splitlines():
+                    if not line.startswith('- [[') or not line.endswith(']]'):
+                        continue
+                    target, separator, label = line[4:-2].partition('|')
+                    path = target.removesuffix('.md') + '.md'
+                    if (separator and not Path(path).is_absolute() and '..' not in Path(path).parts
+                            and not target.startswith(('00_收件箱/', 'notes/'))
+                            and (vault / path).is_file()):
+                        curated.setdefault(path, label)
+        featured = {**curated, **{path: title for path, title in featured.items() if path not in curated}}
         if featured:
             lines += ['## 从这里开始读', '']
-            lines += ['- ' + wiki(path, title) for path, title in sorted(featured, key=lambda pair: pair[1])]
+            lines += ['- ' + wiki(path, title) for path, title in featured.items()]
             lines.append('')
         lines += ['## 实时目录', '', f'![[{base}]]', '',
                   '新增、删除、重命名或移动笔记后，此目录由 Obsidian 自动更新。默认包含子文件夹；切换“按文件夹”查看归属。', '']
         if parent == '20_项目与构想':
-            lines += ['同一项目的构想、设计和实践记录分别保留，由项目子目录汇总；未确认方案继续保留未确认标记。', '']
+            lines += ['主题目录保留已确认的阶段总结、当前设计和实践成稿；待确认构想与AI方案在Inbox继续整理。', '']
         outputs[parent + '/索引.md'] = '\n'.join(lines)
         install_base(base, native_base(topic_scope(parent), inbox=parent == '00_收件箱'))
 
     outputs['首页.md'] = '\n'.join([
-        MARKER, '# 首页', '', '从主题找内容；新材料先入收件箱，保存与网站发布分别操作。', '',
+        MARKER, '# 首页', '', '从这里进入主题、待整理材料和独立发表稿。', '',
         '## 日常入口', '',
-        '- [[00_收件箱/索引|收件箱]]：查看新入库、尚未归类的材料。',
+        '- [[00_收件箱/索引|收件箱]]：需要本人补充、确认或继续梳理的材料。',
+        '- [[05_想法池/索引|想法池]]：已经认领、暂未排期的想法。',
         '- [[10_个人记录/索引|个人记录]]：求职与实习、日记、生活思考和作品感想。',
         '- [[20_项目与构想/索引|项目与构想]]：按项目查看构想、设计和实践。',
         '- [[30_知识与参考/索引|知识与参考]]：算法、模板、技术备忘和参考资料。',
         '- [[works/索引|作品表格]]：维护评分、进度与短感受。',
         '- [[90_归档/索引|归档]]：历史资料与旧实践。', '',
         '## 写作与发布', '',
+        '- [[templates/README|记录模板]]：笔试、面试与感想正文的起点。',
         '- [[使用说明|使用说明]] · [[Copilot库内助手|Copilot 库内助手]]',
         '- [[发布与同步状态|发布与同步状态]] · [[发表稿/索引|全部网站文章]]',
         '- [[笔记目录|全部主题与实时笔记目录]]', '',
-        '文章可以同时出现在主题导航和网站文章目录中，正文只有一份。文件夹不决定公开状态，网站使用明确选定的发布版本。', ''])
+        '私人原稿留在主题目录，独立发表稿统一放在发表稿文件夹，两稿各自修改。发表完成后位置不变；网站使用明确发布的版本，公开状态见发布与同步状态。', ''])
     if maps:
         section = '## 按问题串读\n\n' + '\n'.join(
             '- ' + wiki(path, title) for path, title in sorted(maps.items(), key=lambda pair: pair[1])) + '\n\n'
         outputs['首页.md'] = outputs['首页.md'].replace('## 写作与发布\n', section + '## 写作与发布\n', 1)
+    # Home is curated after installation. Its maintained source and guarded
+    # distribution own future changes; topic refresh must not erase user edits.
+    home = vault / '首页.md'
+    if home.is_file() and home.read_text().startswith(MARKER):
+        outputs['首页.md'] = home.read_text()
     extra_roots = sorted(parent for parent in parents if '/' not in parent and parent not in ROOTS and parent != 'Blogs')
     outputs['笔记目录.md'] = MARKER + '\n# 全部主题\n\n[[首页|返回首页]]\n\n' + '\n'.join(
         '- ' + wiki(root + '/索引.md', Path(root).name.split('_', 1)[-1]) for root in ROOTS + extra_roots

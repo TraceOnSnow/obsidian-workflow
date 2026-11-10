@@ -53,7 +53,7 @@ class ArticlePublishTests(unittest.TestCase):
         preview = publish_article(self.library, request)
         self.assertEqual(preview['public_markdown'], '\n\n# ' + request['title'] + '\n\nQuestion')
 
-    def test_one_call_publishes_verifies_archives_and_links_only_target(self):
+    def test_one_call_publishes_verifies_keeps_publication_folder_and_links_only_target(self):
         unrelated = self.library.create('Other article', title='Other', kind='post', properties={'link': 'other'})
         self.library.publish(unrelated['id'], expected_hash=unrelated['sha256'])
         selected = deepcopy(self.library._read_state()['publications'][unrelated['id']])
@@ -65,7 +65,7 @@ class ArticlePublishTests(unittest.TestCase):
         source = self.library.get(self.note['id'])
         post = self.library.get(result['post_id'])
         self.assertEqual(strip(source['markdown']), self.note['markdown'])
-        self.assertTrue(post['path'].startswith('90_归档/已发表文章/'))
+        self.assertTrue(post['path'].startswith('发表稿/'))
         self.assertIn(post['path'].removesuffix('.md'), source['markdown'])
         self.assertIn('私人原稿', post['markdown'])
         self.assertEqual(selected, self.library._read_state()['publications'][unrelated['id']])
@@ -75,7 +75,7 @@ class ArticlePublishTests(unittest.TestCase):
         self.assertNotIn('RealCorp', json.dumps(remote))
         self.assertIn('int main() {}', remote['markdown'])
 
-    def test_same_request_retry_reuses_archived_identity_without_remote_writes(self):
+    def test_same_request_retry_reuses_identity_without_remote_writes(self):
         first = self.call()
         mutations = len(self.client.mutations)
         again = self.call()
@@ -83,6 +83,26 @@ class ArticlePublishTests(unittest.TestCase):
         self.assertEqual(again['status'], 'published')
         self.assertEqual(len(self.client.mutations), mutations)
         self.assertEqual(len(self.client.latest['posts']), 1)
+
+    def test_legacy_archived_post_returns_to_publication_folder_without_republishing(self):
+        from markdown_library.mcp_actions import LibraryActions
+        first = self.call()
+        post = self.library.get(first['post_id'])
+        old_path = '90_归档/已发表文章/' + post['path'].rsplit('/', 1)[-1]
+        with self.library._lock():
+            state = self.library._load()
+            notes = self.library._scan(state)
+            actions = LibraryActions(self.library)
+            writes, _, _ = actions._changes(state, notes, actions._files(notes), {post['path']: old_path})
+            self.library._commit(state, writes, [(post['path'], post['sha256'])])
+        mutations = len(self.client.mutations)
+        result = self.call()
+        current = self.library.get(result['post_id'])
+        self.assertEqual(current['id'], post['id'])
+        self.assertEqual(current['path'], post['path'])
+        self.assertFalse(self.library._path(old_path).exists())
+        self.assertIn(current['path'].removesuffix('.md'), self.library.get(self.note['id'])['markdown'])
+        self.assertEqual(len(self.client.mutations), mutations)
 
     def test_existing_post_edit_requires_guard_and_retains_identity(self):
         first = self.call()

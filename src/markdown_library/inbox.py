@@ -23,6 +23,23 @@ CATEGORY_ROOTS = ("10_个人记录", "20_项目与构想", "30_知识与参考")
 ARCHIVE = "90_归档/历史资料"
 VERSION = "inbox-deterministic-v1"
 KEY = "inbox_organizer"
+
+
+def admission_mode(library):
+    """A reviewed writing pool must never be silently filed by a title router."""
+    config = library._path('config/editorial-workflow.json')
+    if not config.exists():
+        return 'automatic-routing'
+    try:
+        settings = json.loads(_read(config))
+        mode = settings['inbox_admission']
+        if settings.get('version') != 1 or mode not in {'automatic-routing', 'review-before-filing'}:
+            raise ValueError('unsupported admission mode')
+        return mode
+    except (ValueError, KeyError, TypeError) as exc:
+        raise LibraryError('Invalid editorial workflow configuration; keep Inbox content in place') from exc
+
+
 # Only specific title terms. No body-derived personal facts or general AI index.
 RULES = (
     ("30_知识与参考/算法与编程/模板", r"做题模板|算法模板|(?:python|c\+\+|c17|c\+\+17).{0,12}(?:io|白板|模板)|笔试.?io模板"),
@@ -187,6 +204,12 @@ def organize(vault, *, apply=False, max_new=4, now=None, route_overrides=None):
         if machine.get("version") != VERSION:
             raise LibraryError("Unsupported inbox observation state")
         candidates, outcomes = _read_inbox(library, state)
+        if admission_mode(library) == 'review-before-filing':
+            outcomes += [{'id': note['id'], 'path': note['path'], 'status': 'needs_review',
+                          'reason': 'awaiting_editorial_review'} for note in candidates]
+            return {'applied': apply, 'initialized': not initial, 'editorial_mode': 'review-before-filing',
+                    'counts': dict(Counter(row['status'] for row in outcomes)), 'items': outcomes,
+                    'model_calls': 0, 'archive_filter_required': False}
         allowed = categories(library)
         chosen = []
         organized_ids = {receipt["id"] for receipt in machine["receipts"].values()}

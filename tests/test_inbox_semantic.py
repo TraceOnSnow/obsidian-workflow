@@ -47,6 +47,19 @@ class SemanticInboxTests(unittest.TestCase):
         return self.library.create("# 新构想\n\n我想把每回合的选择做成朋友之间的猜词游戏，尚未实现。\n",
                                    title="一个新想法", path="notes/" + name)
 
+    def test_review_first_blocks_old_semantic_queue_without_any_model_request(self):
+        note = self.note()
+        self.observe()
+        config = self.vault / 'config/editorial-workflow.json'
+        config.parent.mkdir(exist_ok=True)
+        config.write_text(json.dumps({'version': 1, 'inbox_admission': 'review-before-filing'}))
+        before = self.library._read_state()
+        with patch.object(semantic, 'classify', side_effect=AssertionError('No model request allowed')):
+            result = self.run_route()
+        self.assertEqual(result['model_calls'], 0)
+        self.assertEqual(self.library._read_state(), before)
+        self.assertTrue((self.vault / note['path']).exists())
+
     def observe(self):
         organize(self.vault, apply=True, now=self.clock + 1)
 

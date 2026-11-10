@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT.parent / "chatgpt-pipeline/src"))
 
 from markdown_library.core import Library, LibraryError, _split
-from markdown_library.inbox import organize, categories, _read_inbox, KEY
+from markdown_library.inbox import organize, categories, _read_inbox, KEY, admission_mode
 from chatgpt_pipeline import bulk, notes
 from chatgpt_pipeline.verify import require
 
@@ -34,6 +34,8 @@ MAX_BODY = 24000
 def freeze_candidates(vault, limit, now):
     library = Library(vault).validate()
     with library._lock():
+        if admission_mode(library) == 'review-before-filing':
+            return [], []
         if library._path(".markdown-library/transaction.json").exists():
             return [], []
         state = library._read_state()

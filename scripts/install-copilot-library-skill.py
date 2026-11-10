@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Preview/install the local writing Skill without overwriting an existing one."""
+"""First install only; use library-maintenance.py for reviewed ongoing updates."""
 
 import argparse
 import json
@@ -21,7 +21,7 @@ def install(library, *, apply=False):
         target = library._path(relative)
         if target.exists():
             if target.read_bytes() != content:
-                raise LibraryError("Existing personal-library Skill retained; review changes before updating")
+                raise LibraryError("Existing personal-library Skill retained; use library-maintenance.py to review and update maintained copies")
             continue
         files.append((target, content))
     if apply:

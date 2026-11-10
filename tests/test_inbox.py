@@ -29,6 +29,29 @@ class InboxTests(unittest.TestCase):
     def baseline(self):
         return organize(self.vault, apply=True, now=self.clock)
 
+    def test_review_first_keeps_even_obvious_titles_and_retains_routing_ledger(self):
+        self.baseline()
+        note = self.note()
+        config = self.vault / 'config/editorial-workflow.json'
+        config.parent.mkdir(exist_ok=True)
+        config.write_text(json.dumps({'version': 1, 'inbox_admission': 'review-before-filing'}))
+        before = self.library._read_state()
+        for seconds in (1, 65, 500):
+            result = self.observe(seconds)
+            self.assertEqual(result['items'][0]['reason'], 'awaiting_editorial_review')
+            self.assertEqual(result['model_calls'], 0)
+        self.assertEqual(self.library._read_state(), before)
+        self.assertTrue((self.vault / note['path']).exists())
+
+    def test_invalid_admission_settings_fail_closed(self):
+        config = self.vault / 'config/editorial-workflow.json'
+        config.parent.mkdir(exist_ok=True)
+        config.write_text('{invalid')
+        note = self.note()
+        with self.assertRaises(LibraryError):
+            self.observe(500)
+        self.assertTrue((self.vault / note['path']).exists())
+
     def observe(self, seconds=1, **kwargs):
         return organize(self.vault, apply=True, now=self.clock + seconds, **kwargs)
 
