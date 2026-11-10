@@ -4,10 +4,12 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
 
 from markdown_library import Library, LibraryError
+from markdown_library.core import _render, _split
 from markdown_library.sync import export_publication, observed_baseline
 from markdown_library.transport import PayloadClient, TransportError, UncertainWrite, _Store, sync_once
 
@@ -50,6 +52,8 @@ class FakePayload:
         self.publish_mismatch = False
         self.mutate_draft_before_publish = False
         self.normalize_dates = False
+        self.regenerate_experience_ids = False
+        self.regenerate_published_experience_ids = False
 
     def stamp(self):
         self.clock += 1
@@ -80,6 +84,17 @@ class FakePayload:
         if rows[collection][str(remote_id)]["updatedAt"] != expected_version:
             raise UncertainWrite("conditional timestamp mismatch")
         row = {**deepcopy(self.latest[collection][str(remote_id)]), **deepcopy(fields), "updatedAt": self.stamp()}
+        if draft and collection == "works" and self.regenerate_experience_ids:
+            known = {item["id"] for item in self.latest[collection][str(remote_id)].get("experiences", [])}
+            defaults = {"startedOn": None, "endedOn": None, "status": "completed",
+                        "platform": None, "progress": None, "note": None}
+            row["experiences"] = [{**defaults, **item,
+                                   "id": item["id"] if item["id"] in known else "c" * 24}
+                                  for item in row.get("experiences", [])]
+        if not draft and collection == "works" and self.regenerate_published_experience_ids:
+            known = {item["id"] for item in self.base[collection][str(remote_id)].get("experiences", [])}
+            row["experiences"] = [{**item, "id": item["id"] if item["id"] in known else "d" * 24}
+                                  for item in row.get("experiences", [])]
         if not draft and self.publish_mismatch:
             row["title"] = "unexpected server title"
         self.latest[collection][str(remote_id)] = deepcopy(row)
@@ -243,6 +258,211 @@ class SyncExecutorTests(unittest.TestCase):
         self.assertEqual(result["results"][0]["status"], "reconciliation-required")
         self.assertEqual(self.state()["baselines"], {})
         self.assertIn(note["id"], self.state()["pending"])
+
+    def pending_work_with_new_experience(self, *, catalog=False):
+        old = {"id": "a" * 24, "startedOn": None, "endedOn": "2024", "status": "completed",
+               "platform": None, "progress": None, "note": None}
+        note = self.library.create("PRIVATE BODY\n", title="Work", kind="work", properties={
+            "slug": "experience-ids", "type": "game", "rating": 85, "experiences": [old],
+        })
+        if catalog:
+            from markdown_library.work_profile import compact_works
+            from markdown_library.work_catalog import (DEFAULT_PATH, build_catalog, catalog_entry,
+                                                       review_markdown, row_from_note)
+            preview = compact_works(self.library)
+            compact_works(self.library, apply=True, expected_token=preview["expected_token"])
+            note = self.library.get(note["id"])
+            with self.library._lock():
+                state = self.library._load()
+                state["work_catalog"] = {"schema_version": 1, "path": DEFAULT_PATH,
+                                         "rows": {note["id"]: catalog_entry(note, note["path"])}}
+                self.library._atomic(DEFAULT_PATH, build_catalog([row_from_note(note, note["path"])]))
+                self.library._atomic(note["path"], review_markdown(note))
+                self.library._save(state)
+            note = self.library.get(note["id"])
+        publication = self.library.publish(note["id"], expected_hash=note["sha256"])
+        self.baseline(publication)
+        properties, body = _split(note["markdown"])
+        properties["experiences"] = [
+            {"id": "b" * 24, "startedOn": "2019-02", "endedOn": "2019-02"},
+            {"id": "a" * 24, "endedOn": "2024"},
+        ]
+        note = self.library.replace(note["id"], _render(properties, body), expected_hash=note["sha256"])
+        self.library.publish(note["id"], expected_hash=note["sha256"])
+        self.client.regenerate_experience_ids = True
+        previous = deepcopy(self.state()["baselines"])
+        first = sync_once(self.library, self.client, apply=True, works_drafts_and_versions=True)
+        self.assertEqual(first["pending_ids"], [note["id"]])
+        self.assertEqual(self.state()["baselines"], previous)
+        self.assertEqual(len(self.client.mutations), 1)
+        return note, previous
+
+    def test_pending_experience_ids_resume_through_compact_super_table(self):
+        from markdown_library.work_profile import profile
+        note, _ = self.pending_work_with_new_experience(catalog=True)
+        retained = profile(self.library, note["id"])
+        result = sync_once(self.library, self.client, apply=True, works_drafts_and_versions=True,
+                           resume_pending=[note["id"]], only_ids=[note["id"]])
+        self.assertEqual(result["results"][0]["status"], "reconciled")
+        current = self.library.get(note["id"])
+        self.assertEqual(current["properties"]["experiences"][0]["id"], "c" * 24)
+        self.assertEqual(_split(current["markdown"])[1], _split(note["markdown"])[1])
+        self.assertEqual(profile(self.library, note["id"]), retained)
+        self.assertNotIn("slug", current["properties"])
+        self.assertEqual(self.state()["pending"], {})
+
+    def test_explicit_resume_observes_ids_regenerated_again_when_publishing(self):
+        note, previous = self.pending_work_with_new_experience(catalog=True)
+        self.client.regenerate_published_experience_ids = True
+        first_resume = sync_once(self.library, self.client, apply=True, works_drafts_and_versions=True,
+                                 resume_pending=[note["id"]], only_ids=[note["id"]])
+        self.assertEqual(first_resume["pending_ids"], [note["id"]])
+        self.assertEqual(self.state()["baselines"], previous)
+        self.assertEqual(self.library.get(note["id"])["properties"]["experiences"][0]["id"], "c" * 24)
+        self.assertEqual(self.client.latest["works"]["70"]["experiences"][0]["id"], "d" * 24)
+        self.assertEqual(self.client.base["works"]["70"]["_status"], "published")
+        count = len(self.client.mutations)
+        # Neither a normal timer apply nor a preview may adopt another ID.
+        sync_once(self.library, self.client, apply=True, works_drafts_and_versions=True)
+        sync_once(self.library, self.client, resume_pending=[note["id"]], works_drafts_and_versions=True)
+        self.assertEqual(len(self.client.mutations), count)
+        self.assertEqual(self.library.get(note["id"])["properties"]["experiences"][0]["id"], "c" * 24)
+        resumed = sync_once(self.library, self.client, apply=True, works_drafts_and_versions=True,
+                            resume_pending=[note["id"]], only_ids=[note["id"]])
+        self.assertEqual(resumed["results"][0]["status"], "reconciled")
+        self.assertEqual(resumed["pending_ids"], [])
+        self.assertEqual(len(self.client.mutations), count)
+        self.assertEqual(self.library.get(note["id"])["properties"]["experiences"][0]["id"], "d" * 24)
+        self.assertEqual(self.state()["baselines"][note["id"]]["remote_fields"]["experiences"][0]["id"], "d" * 24)
+
+    def test_published_pending_ids_require_identical_independent_views(self):
+        for index, issue in enumerate(("id", "value", "status")):
+            with self.subTest(issue=issue):
+                self.library = Library.initialize(Path(self.temporary.name) / f"published-{index}")
+                self.client = FakePayload()
+                note, previous = self.pending_work_with_new_experience()
+                latest = self.client.latest["works"]["70"]
+                latest["_status"] = "published"
+                self.client.base["works"]["70"] = deepcopy(latest)
+                formal = self.client.base["works"]["70"]
+                if issue == "id": formal["experiences"][0]["id"] = "d" * 24
+                if issue == "value": formal["rating"] = 99
+                if issue == "status": formal["_status"] = "draft"
+                before = self.library.get(note["id"])
+                result = sync_once(self.library, self.client, apply=True, works_drafts_and_versions=True,
+                                   resume_pending=[note["id"]], only_ids=[note["id"]])
+                self.assertEqual(result["pending_ids"], [note["id"]])
+                self.assertEqual(self.state()["baselines"], previous)
+                self.assertEqual(self.library.get(note["id"])["sha256"], before["sha256"])
+                self.assertEqual(len(self.client.mutations), 1)
+
+    def test_explicit_resume_adopts_only_new_server_experience_ids(self):
+        note, previous = self.pending_work_with_new_experience()
+        selected = deepcopy(self.library.publications())
+        sync_once(self.library, self.client, apply=True, works_drafts_and_versions=True)
+        self.assertEqual(len(self.client.mutations), 1)
+        self.assertEqual(self.library.publications(), selected)
+        result = sync_once(self.library, self.client, apply=True, works_drafts_and_versions=True,
+                           resume_pending=[note["id"]], only_ids=[note["id"]])
+        self.assertEqual(result["results"][0]["status"], "reconciled")
+        self.assertEqual(self.state()["pending"], {})
+        self.assertEqual([row[0] for row in self.client.mutations], ["update", "update"])
+        self.assertFalse(self.client.mutations[-1][-1])
+        current = self.library.get(note["id"])
+        before_properties, before_body = _split(note["markdown"])
+        properties, body = _split(current["markdown"])
+        before_properties["experiences"][0]["id"] = "c" * 24
+        self.assertEqual(properties, before_properties)
+        self.assertEqual(body, before_body)
+        actual = self.client.latest["works"]["70"]["experiences"]
+        self.assertEqual([row["id"] for row in actual], ["c" * 24, "a" * 24])
+        self.assertEqual(self.client.base["works"]["70"]["experiences"], actual)
+        self.assertNotEqual(self.state()["baselines"], previous)
+        self.assertEqual(self.library.publications()[0]["sha256"], current["sha256"])
+        properties["rating"] = 90
+        changed = self.library.replace(note["id"], _render(properties, body), expected_hash=current["sha256"])
+        self.library.publish(note["id"], expected_hash=changed["sha256"])
+        following = sync_once(self.library, self.client, apply=True, works_drafts_and_versions=True)
+        self.assertEqual(following["results"][0]["status"], "observed")
+        self.assertEqual(self.client.latest["works"]["70"]["experiences"], actual)
+
+    def test_pending_experience_id_resume_rejects_other_changes(self):
+        def old_id(latest): latest["experiences"][1]["id"] = "d" * 24
+        def reordered(latest): latest["experiences"].reverse()
+        def value(latest): latest["experiences"][0]["endedOn"] = "2020"
+        def omitted_value(latest): latest["experiences"][0]["note"] = "Admin edit"
+        def old_omitted_value(latest): latest["experiences"][1]["platform"] = "Admin edit"
+        def duplicate(latest): latest["experiences"][0]["id"] = "a" * 24
+        def missing_id(latest): latest["experiences"][0].pop("id")
+        def sources(latest): latest["sources"] = [{"provider": "web", "externalId": "unselected"}]
+        for index, mutation in enumerate((old_id, reordered, value, omitted_value, old_omitted_value,
+                                           duplicate, missing_id, sources, None)):
+            with self.subTest(case=index):
+                self.library = Library.initialize(Path(self.temporary.name) / f"case-{index}")
+                self.client = FakePayload()
+                note, previous = self.pending_work_with_new_experience()
+                if mutation:
+                    mutation(self.client.latest["works"]["70"])
+                else:
+                    note = self.library.replace(note["id"], note["markdown"] + "User edit", expected_hash=note["sha256"])
+                current = self.library.get(note["id"])
+                selected = deepcopy(self.library.publications())
+                result = sync_once(self.library, self.client, apply=True, works_drafts_and_versions=True,
+                                   resume_pending=[note["id"]], only_ids=[note["id"]])
+                self.assertEqual(result["pending_ids"], [note["id"]])
+                self.assertEqual(len(self.client.mutations), 1)
+                self.assertEqual(self.state()["baselines"], previous)
+                self.assertEqual(self.library.get(note["id"])["sha256"], current["sha256"])
+                self.assertEqual(self.library.publications(), selected)
+
+    def test_pending_experience_resume_requires_intact_baseline_and_selection(self):
+        for index, issue in enumerate(("baseline-hash", "wrong-remote-id", "selection", "creating")):
+            with self.subTest(issue=issue):
+                self.library = Library.initialize(Path(self.temporary.name) / f"guard-{index}")
+                self.client = FakePayload()
+                note, _ = self.pending_work_with_new_experience()
+                store = _Store(self.library, self.client.target)
+                state = store.load()
+                if issue == "baseline-hash": state["baselines"][note["id"]]["remote_fields"]["title"] = "Tampered"
+                if issue == "wrong-remote-id": state["pending"][note["id"]]["remote_id"] = "999"
+                if issue == "creating": state["pending"][note["id"]]["creating"] = True
+                store.save(state)
+                if issue == "selection": self.library.unpublish(note["id"])
+                previous = deepcopy(self.state()["baselines"])
+                current = self.library.get(note["id"])
+                result = sync_once(self.library, self.client, apply=True, works_drafts_and_versions=True,
+                                   resume_pending=[note["id"]], only_ids=[note["id"]])
+                self.assertEqual(result["pending_ids"], [note["id"]])
+                self.assertEqual(self.state()["baselines"], previous)
+                self.assertEqual(self.library.get(note["id"])["sha256"], current["sha256"])
+                self.assertEqual(len(self.client.mutations), 1)
+
+    def test_pending_experience_canonicalization_interruption_keeps_reviewable_intent(self):
+        for index, failpoint in enumerate(("replace", "publish", "store")):
+            with self.subTest(failpoint=failpoint):
+                self.library = Library.initialize(Path(self.temporary.name) / f"interrupt-{index}")
+                self.client = FakePayload()
+                note, previous = self.pending_work_with_new_experience()
+                if failpoint == "store":
+                    context = patch.object(_Store, "save", side_effect=TransportError("Interrupted store"))
+                else:
+                    original = getattr(self.library, failpoint)
+                    def interrupted(*args, **kwargs):
+                        original(*args, **kwargs)
+                        raise TransportError("Interrupted local canonicalization")
+                    context = patch.object(self.library, failpoint, side_effect=interrupted)
+                with context:
+                    result = sync_once(self.library, self.client, apply=True, works_drafts_and_versions=True,
+                                       resume_pending=[note["id"]], only_ids=[note["id"]])
+                self.assertEqual(result["pending_ids"], [note["id"]])
+                self.assertEqual(self.state()["baselines"], previous)
+                self.assertEqual(len(self.client.mutations), 1)
+                retained = self.library.get(note["id"])
+                again = sync_once(self.library, self.client, apply=True, works_drafts_and_versions=True,
+                                  resume_pending=[note["id"]], only_ids=[note["id"]])
+                self.assertEqual(again["pending_ids"], [note["id"]])
+                self.assertEqual(len(self.client.mutations), 1)
+                self.assertEqual(self.library.get(note["id"])["sha256"], retained["sha256"])
 
     def test_update_uses_latest_version_for_draft_base_version_for_publish(self):
         note, publication = self.post()

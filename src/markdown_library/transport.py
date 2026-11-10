@@ -229,6 +229,79 @@ def _stage_matches(row, expected, collection):
     return row.get("_status") == required and _matches(row, fields, collection)
 
 
+def _canonicalize_pending_experience_ids(library, publication, pending, baseline, latest, *, published=False):
+    """Adopt only server-generated IDs for newly inserted, otherwise exact rows.
+
+    Called only by explicit pending resume, never ordinary matching or writes.
+    Persist through the normal local SHA/selection guards so later updates use
+    the real server identities; the observed baseline is not advanced here.
+    """
+    if publication["kind"] != "work" or pending.get("creating") is not False:
+        return publication
+    fields = export_publication(publication)["fields"]
+    expected = fields if published else _draft_fields(fields, "works")
+    if _stage_matches(latest, expected, "works"):
+        return publication
+    if (not baseline or baseline.get("collection") != "works"
+            or str(baseline.get("remote_id")) != str(latest.get("id"))
+            or str(pending.get("remote_id")) != str(latest.get("id"))
+            or not isinstance(baseline.get("remote_fields"), dict)
+            or content_hash(baseline["remote_fields"]) != baseline.get("remote_hash")):
+        raise TransportError("New experience IDs require a verified existing Work baseline")
+    old_rows = baseline["remote_fields"].get("experiences")
+    selected_rows = expected.get("experiences")
+    actual_rows = _project(latest, "works").get("experiences")
+    if (not all(isinstance(rows, list) and all(isinstance(row, dict) for row in rows)
+                for rows in (old_rows, selected_rows, actual_rows))
+            or len(selected_rows) != len(actual_rows)):
+        raise TransportError("Pending experience rows differ; review required")
+    old_ids = [row.get("id") for row in old_rows]
+    selected_ids = [row.get("id") for row in selected_rows]
+    actual_ids = [row.get("id") for row in actual_rows]
+    if (any(not isinstance(value, str) or not value for value in old_ids + selected_ids + actual_ids)
+            or any(len(ids) != len(set(ids)) for ids in (old_ids, selected_ids, actual_ids))
+            or [value for value in selected_ids if value in old_ids] != old_ids
+            or [value for value in actual_ids if value in old_ids] != old_ids):
+        raise TransportError("Existing experience identities changed; review required")
+    changed = False
+    defaults = {"startedOn": None, "endedOn": None, "status": "completed",
+                "platform": None, "progress": None, "note": None}
+    ancestors = {row["id"]: row for row in old_rows}
+    for selected, actual in zip(selected_rows, actual_rows):
+        # Sparse selections retain observed old-row values; genuinely new rows
+        # may receive only the Payload schema's known null/completed defaults.
+        before = ancestors.get(selected["id"], {})
+        wanted = {key: selected.get(key, before.get(key, default)) for key, default in defaults.items()}
+        received = {key: actual.get(key, default) for key, default in defaults.items()}
+        if received != wanted:
+            raise TransportError("Pending experience values or order differ; review required")
+        left, right = selected["id"], actual["id"]
+        if left != right:
+            if (left in old_ids or right in old_ids or right in selected_ids
+                    or not re.fullmatch(r"[0-9a-fA-F]{24}", right)):
+                raise TransportError("Pending experience identity replacement is not a new server ID")
+            selected["id"] = right
+            changed = True
+    if not changed or not _stage_matches(latest, expected, "works"):
+        raise TransportError("Saved draft differs beyond new experience IDs")
+    actual_fields = _project(latest, "works")
+    if any(actual_fields.get(key) != baseline["remote_fields"].get(key)
+           for key in (actual_fields.keys() | baseline["remote_fields"].keys()) - expected.keys()):
+        raise TransportError("Unselected saved draft fields changed; review required")
+    _selected_unchanged(library, publication)
+    current = library.get(publication["id"])
+    if current["sha256"] != publication["sha256"]:
+        raise TransportError("Current local draft differs from selected publication; review required")
+    properties, private_body = _split(current["markdown"])
+    # Preserve private/unexported row fields and all other local metadata.
+    for row, actual in zip(properties["experiences"], actual_rows):
+        row["id"] = actual["id"]
+    updated = library.replace(current["id"], _render(properties, private_body), expected_hash=current["sha256"])
+    _selected_unchanged(library, publication)
+    library.publish(current["id"], expected_hash=updated["sha256"])
+    return next(row for row in library.publications() if row["id"] == current["id"])
+
+
 def _publish_draft(library, client, publication, pending):
     export = export_publication(publication)
     collection, remote_id = export["collection"], pending["remote_id"]
@@ -676,9 +749,24 @@ def sync_once(library, client, *, apply=False, works_drafts_and_versions=False,
                         if action["collection"] == "works" and not works_drafts_and_versions:
                             raise TransportError("Works draft/version capability is required")
                         latest = client.get(action["collection"], remote_id, draft=True)
+                        if pending.get("remote_id") is not None and str(pending["remote_id"]) != str(remote_id):
+                            raise TransportError("Pending remote identity changed; review required")
+                        published = latest.get("_status") == "published"
+                        if published:
+                            formal = client.get(action["collection"], remote_id, draft=False)
+                            if (formal.get("_status") != "published"
+                                    or str(formal.get("id")) != str(remote_id)
+                                    or _remote_hash(formal, action["collection"]) != _remote_hash(latest, action["collection"])):
+                                raise TransportError("Published latest and base differ; preserve pending outcome for review")
+                        canonical = _canonicalize_pending_experience_ids(
+                            library, publication, pending, planning_baselines.get(note_id), latest, published=published)
+                        if canonical is not publication:
+                            publication = _resolve_relationships(canonical, state["baselines"])
+                        pending["publication_hash"] = export_publication(publication)["content_hash"]
                         pending.update({"remote_id": remote_id, "draft_version": latest.get("updatedAt"), "draft_hash": _remote_hash(latest, action["collection"])})
                         store.save(state)
-                        baseline = _publish_draft(library, client, publication, pending)
+                        baseline = (_verify_both(client, publication, remote_id) if published
+                                    else _publish_draft(library, client, publication, pending))
                     if apply:
                         state["baselines"][note_id] = baseline
                         state["reverse_imports"].pop(note_id, None)
