@@ -120,7 +120,7 @@ class LibraryActionTests(unittest.TestCase):
             self.actions.move(note["id"], "notes/link/new.md", note["sha256"])
         (self.vault / "notes/link").unlink()
         post = self.note("posts/post.md", kind="post")
-        with self.assertRaisesRegex(LibraryError, "Only notes"):
+        with self.assertRaisesRegex(LibraryError, "only be renamed inside"):
             self.actions.move(post["id"], "notes/post.md", post["sha256"])
 
     def test_ambiguous_short_wikilink_rejected_but_explicit_path_allowed(self):

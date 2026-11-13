@@ -19,6 +19,7 @@ from .core import Library, LibraryError, _hash, _now, _read, _registration_front
 
 
 _ROOTS = {"00_收件箱", "05_想法池", "notes", "10_个人记录", "20_项目与构想", "25_游戏设计", "28_小说灵感", "30_知识与参考", "90_归档"}
+_POST_FOLDER = "发表稿"
 _NAVIGATION = {"首页", "索引", "目录", "使用说明", "网站内容", "发布与同步状态", "AGENTS", "SKILL", "README", "Copilot库内助手"}
 _RESERVED_NAMES = {name.casefold() for name in _NAVIGATION}
 _CONFIG_FOLDERS = {"copilot", "templates", "assets", "config"}
@@ -217,11 +218,13 @@ class LibraryActions:
         except (OSError, LibraryError):
             return False
 
-    def _destination(self, destination):
+    def _destination(self, destination, *, folder=None):
         if not isinstance(destination, str) or not destination or "\\" in destination:
             raise LibraryError("Move requires a safe relative Markdown destination")
         path = PurePosixPath(destination)
-        if (path.is_absolute() or len(path.parts) < 2 or path.parts[0] not in _ROOTS
+        if folder is not None and str(path.parent) != folder:
+            raise LibraryError("A Post can only be renamed inside " + folder)
+        if (path.is_absolute() or len(path.parts) < 2 or (folder is None and path.parts[0] not in _ROOTS)
                 or any(part.startswith(".") for part in path.parts)
                 or any(part.casefold() in _CONFIG_FOLDERS for part in path.parts)
                 or not destination.endswith(".md") or path.stem.casefold() in _RESERVED_NAMES
@@ -309,8 +312,14 @@ class LibraryActions:
                     raise LibraryError('Each move requires note_id, destination, expected_hash and optional title')
                 note = library._required(notes, row['note_id'])
                 library._expect(note, row['expected_hash'])
-                if note['properties']['kind'] != 'note':
-                    raise LibraryError('Only notes can be moved')
+                kind = note['properties']['kind']
+                if kind == 'post':
+                    # Posts stay in the publication folder: only the local filename
+                    # changes. Title, link and publication state are untouched.
+                    if 'title' in row or str(PurePosixPath(note['path']).parent) != _POST_FOLDER:
+                        raise LibraryError('A Post can only be renamed inside 发表稿; change its title with publish-article')
+                elif kind != 'note':
+                    raise LibraryError('Only notes and Post filenames can be moved')
                 if (PurePosixPath(note['path']).stem.casefold() in _RESERVED_NAMES
                         or any(p.casefold() in _CONFIG_FOLDERS for p in PurePosixPath(note['path']).parts)):
                     raise LibraryError('Navigation/configuration files cannot be moved')
@@ -321,7 +330,8 @@ class LibraryActions:
                     properties['title'] = row['title']
                     replacements[note['path']] = _render(properties, body)
                 destination = (note['path'] if 'title' in row and row['destination'] == note['path']
-                               else self._destination(row['destination']))
+                               else self._destination(row['destination'],
+                                                      folder=_POST_FOLDER if kind == 'post' else None))
                 if note['id'] in ids or destination in destinations:
                     raise LibraryError('Duplicate move identity or destination')
                 ids.add(note['id']); destinations.add(destination)

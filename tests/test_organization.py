@@ -71,6 +71,25 @@ class OrganizationTests(unittest.TestCase):
             self.assertEqual(saved['properties'], original['properties'] | {'title': title})
         self.assertTrue((self.vault / self.b['path']).exists())
 
+    def test_post_file_rename_stays_in_post_folder_and_keeps_title_and_links(self):
+        post = self.library.create('Post body', title='Public title', kind='post', path='发表稿/article-x.md')
+        (self.vault / '00_收件箱/A.md').write_text(self.a['markdown'] + '\n[[发表稿/article-x|post]]\n')
+        self.a = self.library.get(self.a['id'])
+        request = {'operation': 'move', 'moves': [{'note_id': post['id'],
+                   'destination': '发表稿/2026-10-30 Public title.md', 'expected_hash': post['sha256']}]}
+        preview = organize(self.library, request)
+        result = organize(self.library, request, apply=True, expected_token=preview['token'])
+        self.assertTrue(result['readback_verified'])
+        saved = self.library.get(post['id'])
+        self.assertEqual(saved['path'], '发表稿/2026-10-30 Public title.md')
+        self.assertEqual(saved['properties'], post['properties'])
+        self.assertIn('[[发表稿/2026-10-30 Public title|post]]', self.library.get(self.a['id'])['markdown'])
+        for bad in [{'destination': '25_游戏设计/Moved.md'},
+                    {'destination': '发表稿/Other.md', 'title': 'Changed'}]:
+            row = {'note_id': post['id'], 'expected_hash': saved['sha256']} | bad
+            with self.assertRaises(LibraryError):
+                organize(self.library, {'operation': 'move', 'moves': [row]})
+
     def test_token_binds_new_backlinks_and_prevents_partial_moves(self):
         request = self.request()
         preview = organize(self.library, request)

@@ -57,6 +57,11 @@ The receipt includes final IDs, paths, hashes, link repair counts and
 or cross-links; `content_unchanged` reports exact byte identity, not semantic
 equivalence. Merge sources remain recoverable through the original lifecycle.
 
+A Post may also be moved, but only to another filename inside `发表稿/`. This
+renames the local file and repairs links; its title, website link and
+publication state stay unchanged, and `title` is rejected for Posts (change a
+public title with `publish-article`).
+
 A move item may also specify a short `title`. This changes only the frontmatter
 title and preserves the full body, including any authored heading; the receipt
 reports `body_unchanged`. To change just the display title, keep the same
