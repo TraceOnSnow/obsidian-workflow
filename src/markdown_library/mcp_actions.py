@@ -18,7 +18,7 @@ from uuid import uuid4
 from .core import Library, LibraryError, _hash, _now, _read, _registration_frontmatter, _render, _split
 
 
-_ROOTS = {"00_收件箱", "05_想法池", "notes", "10_个人记录", "20_项目与构想", "25_游戏设计", "30_知识与参考", "90_归档"}
+_ROOTS = {"00_收件箱", "05_想法池", "notes", "10_个人记录", "20_项目与构想", "25_游戏设计", "28_小说灵感", "30_知识与参考", "90_归档"}
 _NAVIGATION = {"首页", "索引", "目录", "使用说明", "网站内容", "发布与同步状态", "AGENTS", "SKILL", "README", "Copilot库内助手"}
 _RESERVED_NAMES = {name.casefold() for name in _NAVIGATION}
 _CONFIG_FOLDERS = {"copilot", "templates", "assets", "config"}

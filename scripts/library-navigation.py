@@ -16,7 +16,7 @@ from markdown_library.bootstrap import _index
 
 MARKER = '<!-- markdown-library:topic-navigation:v1 -->'
 BASE_MARKER = '# markdown-library:topic-base:v1; installed once, user editable'
-ROOTS = ['00_收件箱', '05_想法池', '10_个人记录', '20_项目与构想', '25_游戏设计', '30_知识与参考', '90_归档']
+ROOTS = ['00_收件箱', '05_想法池', '10_个人记录', '20_项目与构想', '25_游戏设计', '28_小说灵感', '30_知识与参考', '90_归档']
 # Only these working folders get a generated page and live Base (2026-11-13).
 # Topic folders are browsed in Obsidian's file explorer and the all-notes Base;
 # Works and 发表稿 keep their own index generator.

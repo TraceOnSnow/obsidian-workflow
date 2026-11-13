@@ -90,6 +90,7 @@ class NavigationTests(unittest.TestCase):
             library = Library.initialize(vault)
             library.create('A recognized seed', title='Seed', path='05_想法池/Seed.md')
             library.create('A game idea', title='Game', path='25_游戏设计/Game.md')
+            library.create('A novel idea', title='Novel', path='28_小说灵感/Novel.md')
             library.create('Unreviewed material', title='Raw', path='00_收件箱/Raw.md')
             outputs = navigation.generate(vault, [])
             install(vault, outputs)
@@ -103,6 +104,8 @@ class NavigationTests(unittest.TestCase):
             self.assertNotIn('25_游戏设计/索引', outputs['首页.md'] + outputs['笔记目录.md'])
             rows = evaluate_bases(vault, [navigation.ALL_BASE])[navigation.ALL_BASE]
             self.assertIn('25_游戏设计/Game.md', rows)
+            self.assertIn('28_小说灵感/Novel.md', rows)
+            self.assertNotIn('28_小说灵感/索引.md', outputs)
 
     def test_only_working_folders_get_pages_and_manual_index_is_untouched(self):
         with tempfile.TemporaryDirectory() as temporary:
