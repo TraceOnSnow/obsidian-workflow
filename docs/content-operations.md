@@ -95,6 +95,13 @@ until one is selected. It accepts only a job recorded for that note, and only
 `jobs/<job_id>/input.json` inside the explicit local workspace; paths and symlinks
 cannot escape it. This local source-file reader is not exposed over remote MCP.
 
+For timestamps, it can additionally read the source package named in that saved
+input, after checking its exact byte hash and conversation identity. It returns
+UTC `created_at` values only for the selected messages, plus conversation dates
+and `source_timestamps.status`; missing or changed packages provide no dates.
+This does not reverify the original upload commit or turn draft creation times
+into message times.
+
 The messages are the recorded inputs used for that historical draft. They are
 not a live query of ChatGPT or a fresh verification of the original export. The
 receipt names that artifact and includes its exact file hash. Missing material

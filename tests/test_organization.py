@@ -178,6 +178,36 @@ class OrganizationTests(unittest.TestCase):
         refreshed = dispatch(parser().parse_args(nav_args + ['--apply', '--expected-token', nav_preview['token']]))
         self.assertEqual(refreshed['state'], 'refreshed')
 
+    def test_source_timestamps_require_matching_recorded_package(self):
+        job = 'b' * 64
+        note = self.library.import_note('Original', source_id='chat:times', title='Times',
+                                       source={'type': 'chatgpt-workbench', 'job_id': job})
+        workspace = self.root / 'time-workbench'
+        job_path = workspace / 'jobs' / job; job_path.mkdir(parents=True)
+        package = self.root / 'source.json'
+        raw = {'raw': {'id': 'conversation', 'create_time': 0, 'mapping': {
+            'node': {'message': {'id': 'source-message', 'create_time': 60}},
+            'other': {'message': {'id': 'unselected', 'create_time': 120}}}}}
+        data = json.dumps(raw).replace(', ', ',\r\n').encode()
+        package.write_bytes(data)
+        from hashlib import sha256
+        material = {'source': {'source_path': str(package), 'byte_sha256': sha256(data).hexdigest(),
+                              'conversation_id': 'conversation'},
+                    'messages': [{'id': 'm001', 'source_message_id': 'source-message', 'role': 'user', 'text': 'code'}]}
+        (job_path / 'input.json').write_text(json.dumps(material))
+        result = source_messages(self.library, note['id'], workbench=workspace)
+        self.assertEqual(result['messages'][0]['created_at'], '1970-01-01T00:01:00+00:00')
+        self.assertEqual(result['source_timestamps']['conversation_created_at'], '1970-01-01T00:00:00+00:00')
+        self.assertNotIn('unselected', json.dumps(result))
+        self.assertFalse(result['original_export_reverified'])
+        package.write_bytes(data + b' ')
+        changed = source_messages(self.library, note['id'], workbench=workspace)
+        self.assertIsNone(changed['messages'][0]['created_at'])
+        self.assertEqual(changed['source_timestamps']['status'], 'source_hash_mismatch')
+        package.unlink()
+        missing = source_messages(self.library, note['id'], workbench=workspace)
+        self.assertEqual(missing['source_timestamps']['status'], 'unavailable')
+
     def test_provenance_and_recorded_messages_are_scoped_bounded_and_read_only(self):
         job = 'a' * 64
         note = self.library.import_note('Original', source_id='chat:test', title='Source',
