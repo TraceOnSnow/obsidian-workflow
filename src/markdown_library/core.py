@@ -21,6 +21,11 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import yaml
 
+# libyaml parses and emits the same documents several times faster than the
+# pure-Python implementation; fall back when the extension is unavailable.
+_YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+_YAML_DUMPER = getattr(yaml, "CSafeDumper", yaml.SafeDumper)
+
 
 class LibraryError(Exception):
     """A visible validation, conflict, or library integrity error."""
@@ -124,7 +129,7 @@ def _split(markdown):
         if end is None:
             raise LibraryError("Unclosed YAML frontmatter")
         try:
-            properties = yaml.safe_load("".join(lines[1:end])) or {}
+            properties = yaml.load("".join(lines[1:end]), Loader=_YAML_LOADER) or {}
         except yaml.YAMLError as exc:
             raise LibraryError(f"Invalid YAML frontmatter: {exc}") from exc
         if not isinstance(properties, dict):
@@ -134,7 +139,7 @@ def _split(markdown):
 
 
 def _render(properties, body):
-    return "---\n" + yaml.safe_dump(properties, allow_unicode=True, sort_keys=False) + "---\n" + body
+    return "---\n" + yaml.dump(properties, Dumper=_YAML_DUMPER, allow_unicode=True, sort_keys=False) + "---\n" + body
 
 
 def _registration_frontmatter(markdown):
@@ -287,6 +292,15 @@ class Library:
             raise LibraryError(f"Cannot read private state: {exc}") from exc
 
     def _save(self, state):
+        # Read-only calls usually observe nothing new. Comparing the decoded
+        # state is much cheaper than re-encoding it with indentation (which
+        # cannot use the C encoder), and skips the atomic rewrite entirely.
+        target = self._path(".markdown-library/state.json")
+        try:
+            if target.is_file() and json.loads(_read(target)) == state:
+                return
+        except (OSError, ValueError):
+            pass
         self._atomic(".markdown-library/state.json", json.dumps(state, ensure_ascii=False, indent=2, allow_nan=False))
 
     def _commit(self, state, writes=None, removes=None, *, storage_resolved=False):
