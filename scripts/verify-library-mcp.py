@@ -20,7 +20,7 @@ async def verify(vault):
                 await session.initialize()
                 tools = (await session.list_tools()).tools
                 names = sorted(t.name for t in tools)
-                assert names == ['get_note', 'get_workflow', 'note_history', 'search_notes']
+                assert names == ['get_note', 'get_workflow', 'note_history', 'note_sources', 'search_notes']
                 assert all(t.annotations.readOnlyHint for t in tools)
                 workflow = await session.call_tool('get_workflow', {})
                 assert not workflow.isError and workflow.structuredContent['read_only']

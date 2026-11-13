@@ -1,0 +1,99 @@
+# Local content operations
+
+The installed `markdown-library` CLI and MCP use the same guarded organization
+implementation. These operations manage private drafts only: they never select
+publication, call a model, or write to a website. Use the CLI directly when the
+current Agent does not have an MCP connection; do not import internal Python
+helpers or construct a temporary orchestration script.
+
+## Find the current inputs
+
+`search` returns bounded identities, paths and hashes, rather than every matching
+body. Read a selected note with `get ID` before preparing semantic changes.
+
+```sh
+markdown-library --vault /absolute/vault search --query game --limit 10
+markdown-library --vault /absolute/vault get NOTE_ID
+markdown-library --vault /absolute/vault organize --schema
+```
+
+## Move a batch or merge an approved group
+
+`organize`, `move`, and `merge` accept `--request FILE` or `--request -` for stdin.
+The latter two enforce the corresponding operation type. A move request is:
+
+```json
+{
+  "operation": "move",
+  "moves": [
+    {
+      "note_id": "NOTE_ID",
+      "destination": "25_游戏设计/Existing name.md",
+      "expected_hash": "SHA_FROM_CURRENT_READ"
+    }
+  ]
+}
+```
+
+A merge request contains `operation: "merge"`, `target_id`, `source_ids`, the
+complete target `markdown`, and `expected_hashes` for the target and every source.
+Preserve all target properties. The program validates this, protects mapped or
+published sources, retains originals, and redirects imported source identities.
+
+```sh
+markdown-library --vault /absolute/vault organize --request request.json
+markdown-library --vault /absolute/vault organize --request request.json --apply --expected-token PREVIEW_TOKEN
+```
+
+The Agent obtains the hashes and token; the user does not need to copy or manage
+them. Preview makes no content/history/state changes. Apply rechecks the request,
+current files and source/publication mappings under the library lock. A changed
+note, new backlink, occupied path, duplicate destination or conflicting parent
+invalidates the batch before any note is moved. Up to 100 moves share one library
+transaction, so changes to cross-links are computed once against the whole map.
+
+The receipt includes final IDs, paths, hashes, link repair counts and
+`readback_verified`. A moved note may require link-only edits for relative assets
+or cross-links; `content_unchanged` reports exact byte identity, not semantic
+equivalence. Merge sources remain recoverable through the original lifecycle.
+
+Directories refresh after the content transaction. A directory problem cannot
+undo the saved content operation: inspect the separate `navigation` result, and
+retry only the directory step, never the move/merge. Custom indexes and existing
+Base layouts are retained and listed separately; they do not prevent unrelated
+generated directories from refreshing. No retired empty Blogs entry is recreated.
+
+```sh
+markdown-library --vault /absolute/vault navigation --scope 25_游戏设计
+markdown-library --vault /absolute/vault navigation --scope 25_游戏设计 --apply --expected-token PREVIEW_TOKEN
+```
+
+Existing single-note MCP `move_note` and `merge_notes` calls remain compatible.
+For a batch or an explicit preview use `organize_notes(schema=true)`, then submit
+the request, then apply with its token. Read-only MCP does not expose this tool.
+`get_workflow` reads the maintained in-vault policy on each call when available,
+so a conversation-driven rule update does not depend on editing a second embedded
+policy or restarting the service. The built-in workflow remains a fallback for a
+new deployment without that policy file.
+
+## Find recorded source messages
+
+```sh
+markdown-library --vault /absolute/vault sources NOTE_ID
+markdown-library --vault /absolute/vault source-messages NOTE_ID --workbench /absolute/workbench --job-id RECORDED_JOB_ID --role user --limit 5
+```
+
+`sources` (MCP: `note_sources`) returns only the selected current note's source
+references and merge redirects. It does not expose arbitrary state or credentials.
+If several source jobs are recorded, `source-messages` returns `available_jobs`
+until one is selected. It accepts only a job recorded for that note, and only
+`jobs/<job_id>/input.json` inside the explicit local workspace; paths and symlinks
+cannot escape it. This local source-file reader is not exposed over remote MCP.
+
+The messages are the recorded inputs used for that historical draft. They are
+not a live query of ChatGPT or a fresh verification of the original export. The
+receipt names that artifact and includes its exact file hash. Missing material
+is reported rather than inferred. Use `offset`/`limit`, optionally `role`, and
+`max-chars` to bound the read. A long message returns an explicit continuation
+with `offset` and `text_offset`; resume it with `--limit 1 --text-offset N`. No
+truncated segment should be treated as a complete conversation.

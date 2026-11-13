@@ -22,6 +22,32 @@ def parser():
     listing.add_argument("--query", default="")
     for name in ("get", "unpublish", "publication"):
         commands.add_parser(name).add_argument("id")
+    search = commands.add_parser('search', help='Bounded current-note search; returns identities and hashes, not full bodies')
+    search.add_argument('--query', default='')
+    search.add_argument('--kind', choices=['note', 'work', 'post'])
+    search.add_argument('--folder')
+    search.add_argument('--limit', type=int, default=20)
+    search.add_argument('--offset', type=int, default=0)
+    commands.add_parser('sources', help='Read provenance for one current note, including merged source redirects').add_argument('id')
+    messages = commands.add_parser('source-messages', help='Read bounded recorded messages from an explicitly selected local workbench')
+    messages.add_argument('id')
+    messages.add_argument('--workbench', required=True)
+    messages.add_argument('--job-id')
+    messages.add_argument('--role', choices=['user', 'assistant'])
+    messages.add_argument('--offset', type=int, default=0)
+    messages.add_argument('--limit', type=int, default=10)
+    messages.add_argument('--max-chars', type=int, default=20000)
+    messages.add_argument('--text-offset', type=int, default=0)
+    for name in ('organize', 'move', 'merge'):
+        command = commands.add_parser(name, help='Preview/apply guarded organization; move accepts a batch')
+        command.add_argument('--schema', action='store_true')
+        command.add_argument('--request', help='JSON request file, or - for stdin')
+        command.add_argument('--apply', action='store_true')
+        command.add_argument('--expected-token')
+    navigation = commands.add_parser('navigation', help='Preview/refresh native directories, retaining custom indexes and Bases')
+    navigation.add_argument('--scope', action='append', help='Visible relative folder; repeat to limit refresh')
+    navigation.add_argument('--apply', action='store_true')
+    navigation.add_argument('--expected-token')
     work_review = commands.add_parser('prepare-work-review', help='Prepare Work body as a linked Post current draft; never select or publish')
     work_review.add_argument('id')
     work_review.add_argument('--expected-hash', required=True)
@@ -141,6 +167,23 @@ def parser():
 
 
 def dispatch(arguments):
+    if arguments.command in {'organize', 'move', 'merge'}:
+        from .organize import REQUEST_SCHEMA, organize
+        if arguments.schema:
+            if arguments.apply or arguments.request or arguments.expected_token:
+                raise LibraryError('--schema cannot be combined with an operation')
+            return REQUEST_SCHEMA
+        if not arguments.request:
+            raise LibraryError('Organization requires --request or --schema')
+        return organize(Library(arguments.vault), json.loads(_read(arguments.request)),
+                        apply=arguments.apply, expected_token=arguments.expected_token,
+                        operation=None if arguments.command == 'organize' else arguments.command)
+    if arguments.command == 'navigation':
+        from .navigation import refresh_navigation
+        if arguments.apply and not arguments.expected_token:
+            raise LibraryError('Navigation apply requires a current preview token')
+        return refresh_navigation(Library(arguments.vault), apply=arguments.apply,
+                                  expected_token=arguments.expected_token, scopes=arguments.scope)
     if arguments.command == 'publish-article':
         from .article_publish import REQUEST_SCHEMA, publish_article, client_settings
         if arguments.schema:
@@ -161,6 +204,18 @@ def dispatch(arguments):
         return {"initialized": True, "vault": str(library.vault)}
     library = Library(arguments.vault)
     action = arguments.command
+    if action == 'search':
+        from .note_queries import search_notes
+        return search_notes(library, arguments.query, kind=arguments.kind, folder=arguments.folder,
+                            limit=arguments.limit, offset=arguments.offset)
+    if action == 'sources':
+        from .note_queries import note_sources
+        return note_sources(library, arguments.id)
+    if action == 'source-messages':
+        from .note_queries import source_messages
+        return source_messages(library, arguments.id, workbench=arguments.workbench,
+            job_id=arguments.job_id, role=arguments.role, offset=arguments.offset,
+            limit=arguments.limit, max_chars=arguments.max_chars, text_offset=arguments.text_offset)
     if action == "relations":
         from .relations import refresh_relations
         return refresh_relations(library, apply=arguments.apply)
@@ -272,6 +327,9 @@ def main(argv=None):
         output = dispatch(arguments)
         print(json.dumps(output, ensure_ascii=False, allow_nan=False))
         if arguments.command == 'publish-article' and output.get('status') == 'needs_review':
+            return 2
+        if arguments.command in {'organize', 'move', 'merge', 'navigation'} and (
+                output.get('status') == 'needs_review' or output.get('state') == 'needs_review'):
             return 2
         return 0
     except (LibraryError, OSError, ValueError, TypeError) as exc:

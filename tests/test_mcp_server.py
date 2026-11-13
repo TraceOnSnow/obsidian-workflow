@@ -38,7 +38,7 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                 init = await session.initialize()
                 self.assertIn('get_workflow', init.instructions)
                 tools = (await session.list_tools()).tools
-                self.assertEqual(len(tools), 9)
+                self.assertEqual(len(tools), 11)
                 self.assertFalse(any('publish' in t.name or 'shell' in t.name for t in tools))
                 self.assertLess(len(json.dumps([t.model_dump(exclude_none=True) for t in tools])), 19000)
                 annotations = {t.name: t.annotations for t in tools}
@@ -92,7 +92,8 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                 await session.initialize()
                 result = await self.call(session, 'move_note', {'note_id': note['id'],
                     'destination': '10_个人记录/keep.md', 'expected_hash': note['sha256']})
-                self.assertEqual(result['navigation']['state'], 'needs_refresh')
+                self.assertEqual(result['navigation']['state'], 'refreshed')
+                self.assertIn('首页.md', result['navigation']['preserved'])
                 self.assertEqual(self.library.get(note['id'])['path'], '10_个人记录/keep.md')
                 self.assertEqual((self.vault / '首页.md').read_text(), '用户自己的首页，不能覆盖。')
 
@@ -113,7 +114,7 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
             async with ClientSession(reader, writer) as session:
                 await session.initialize()
                 self.assertEqual({t.name for t in (await session.list_tools()).tools},
-                    {'get_workflow', 'search_notes', 'get_note', 'note_history'})
+                    {'get_workflow', 'search_notes', 'get_note', 'note_history', 'note_sources'})
                 self.assertTrue((await self.call(session, 'get_workflow'))['read_only'])
 
     async def test_pagination_does_not_return_full_corpus(self):
@@ -126,6 +127,32 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                 second = await self.call(session, 'search_notes', {'limit': 1, 'offset': first['next_offset']})
                 self.assertNotEqual(first['items'][0]['id'], second['items'][0]['id'])
                 self.assertNotIn('full private body', json.dumps(first))
+
+    async def test_batch_organization_schema_and_live_workflow(self):
+        a = self.library.create('A', title='A')
+        b = self.library.create('B', title='B')
+        policy = self.vault / 'config/整理与发表规约.md'
+        policy.parent.mkdir(exist_ok=True)
+        policy.write_text('Current writing and organization rules')
+        async with stdio_client(self.params()) as (reader, writer):
+            async with ClientSession(reader, writer) as session:
+                await session.initialize()
+                workflow = await self.call(session, 'get_workflow')
+                self.assertEqual(workflow['instructions'], policy.read_text())
+                policy.write_text('Updated in this conversation')
+                self.assertEqual((await self.call(session, 'get_workflow'))['instructions'], policy.read_text())
+                schema = await self.call(session, 'organize_notes', {'schema': True})
+                self.assertIn('oneOf', schema)
+                request = {'operation': 'move', 'moves': [
+                    {'note_id': n['id'], 'destination': '25_游戏设计/' + n['id'] + '.md',
+                     'expected_hash': n['sha256']} for n in (a, b)]}
+                preview = await self.call(session, 'organize_notes', {'request': request})
+                await self.call(session, 'organize_notes', {'request': request, 'apply': True}, error=True)
+                result = await self.call(session, 'organize_notes', {
+                    'request': request, 'apply': True, 'expected_token': preview['token']})
+                self.assertTrue(result['readback_verified'])
+                self.assertEqual(len(result['moves']), 2)
+                self.assertEqual((await self.call(session, 'note_sources', {'note_id': a['id']}))['id'], a['id'])
 
     def test_missing_vault_never_initialized(self):
         missing = Path(self.tmp.name) / 'missing'

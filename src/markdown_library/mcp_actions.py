@@ -8,16 +8,17 @@ from __future__ import annotations
 
 import copy
 import json
-from pathlib import PurePosixPath
+import os
+from pathlib import Path, PurePosixPath
 import posixpath
 import re
 from urllib.parse import quote, unquote
 from uuid import uuid4
 
-from .core import Library, LibraryError, _hash, _now, _read, _registration_frontmatter
+from .core import Library, LibraryError, _hash, _now, _read, _registration_frontmatter, _split
 
 
-_ROOTS = {"00_收件箱", "05_想法池", "notes", "10_个人记录", "20_项目与构想", "30_知识与参考", "90_归档"}
+_ROOTS = {"00_收件箱", "05_想法池", "notes", "10_个人记录", "20_项目与构想", "25_游戏设计", "30_知识与参考", "90_归档"}
 _NAVIGATION = {"首页", "索引", "目录", "使用说明", "网站内容", "发布与同步状态", "AGENTS", "SKILL", "README", "Copilot库内助手"}
 _RESERVED_NAMES = {name.casefold() for name in _NAVIGATION}
 _CONFIG_FOLDERS = {"copilot", "templates", "assets", "config"}
@@ -167,6 +168,45 @@ class LibraryActions:
     def __init__(self, library: Library):
         self.library = library
 
+    def _snapshot(self):
+        """Observe files without creating checkpoints during a preview."""
+        from .bootstrap import _index
+        state, notes = _index(self.library)
+        if any(state['notes'].get(note_id, {}).get('deleted') for note_id in notes):
+            raise LibraryError('Deleted identity reappeared outside recover')
+        parsed = {}
+        for directory, names, filenames in os.walk(self.library.vault, followlinks=False):
+            names[:] = [name for name in names if not name.startswith('.')]
+            for name in filenames:
+                if name.startswith('.') or not name.lower().endswith('.md'):
+                    continue
+                relative = (Path(directory) / name).relative_to(self.library.vault).as_posix()
+                markdown = _read(self.library._path(relative))
+                parsed[relative] = (_hash(markdown), _split(markdown)[0])
+        self.library._parsed_files = parsed
+        return state, notes, self._files(notes)
+
+    def _token(self, request, state, files):
+        return _hash(json.dumps({'version': 1, 'vault': str(self.library.vault.resolve()),
+            'request': request, 'files': {p: f['sha256'] for p, f in files.items()},
+            'sources': state['sources'], 'publications': state['publications']},
+            ensure_ascii=False, sort_keys=True))
+
+    def _retain(self, state, notes, updated, source_ids):
+        for note_id in set(updated) | set(source_ids):
+            self.library._remember(state, notes[note_id], 'observed')
+        for note in updated.values():
+            self.library._remember(state, note, 'mcp-organized')
+
+    def _readback(self, updated):
+        try:
+            from .bootstrap import _index
+            actual = _index(self.library)[1] if any(n.get('catalog_backed') for n in updated.values()) else {}
+            return all((actual.get(n['id'], {}).get('sha256') if n.get('catalog_backed') else
+                        _hash(_read(self.library._path(n['path'])))) == n['sha256'] for n in updated.values())
+        except (OSError, LibraryError):
+            return False
+
     def _destination(self, destination):
         if not isinstance(destination, str) or not destination or "\\" in destination:
             raise LibraryError("Move requires a safe relative Markdown destination")
@@ -202,7 +242,7 @@ class LibraryActions:
                 self.library._expect(files[note["path"]], note["sha256"])
         return files
 
-    def _changes(self, state, notes, files, redirects, *, replacement=None, removed=()):
+    def _changes(self, state, notes, files, redirects, *, replacement=None, removed=(), remember=True):
         writes, links_updated, updated = [], 0, {}
         by_path = {note["path"]: note for note in notes.values()}
         for path, file in files.items():
@@ -233,29 +273,59 @@ class LibraryActions:
                 self.library._assert_note_storage(by_path[path])
             else:
                 self.library._expect({"sha256": _hash(_read(self.library._path(path)))}, files[path]["sha256"])
-        for note in updated.values():
-            self.library._remember(state, note, "mcp-organized")
+        if remember:
+            for note in updated.values():
+                self.library._remember(state, note, "mcp-organized")
         return writes, updated, links_updated
 
     def move(self, note_id, destination, expected_hash) -> dict:
+        result = self.move_many([{'note_id': note_id, 'destination': destination,
+                                 'expected_hash': expected_hash}])
+        return result['moves'][0] | {key: result[key] for key in
+            ('links_updated', 'publication_selected', 'readback_verified', 'status')}
+
+    def move_many(self, moves, *, apply=True, expected_token=None):
+        if not isinstance(moves, list) or not 1 <= len(moves) <= 100:
+            raise LibraryError('Move batch requires 1..100 explicit notes')
         library = self.library
         with library._lock():
-            state = library._load()
-            notes = library._scan(state)
-            note = library._required(notes, note_id)
-            library._expect(note, expected_hash)
-            if note["properties"]["kind"] != "note":
-                raise LibraryError("Only notes can be moved")
-            destination = self._destination(destination)
-            if (PurePosixPath(note["path"]).stem.casefold() in _RESERVED_NAMES
-                    or any(part.casefold() in _CONFIG_FOLDERS for part in PurePosixPath(note["path"]).parts)):
-                raise LibraryError("Navigation/configuration files cannot be moved")
-            files = self._files(notes)
-            writes, updated, links = self._changes(state, notes, files, {note["path"]: destination})
-            library._commit(state, writes, [(note["path"], expected_hash)])
-            current = updated[note_id]
-            return {"id": note_id, "path": destination, "previous_path": note["path"],
-                    "sha256": current["sha256"], "links_updated": links, "publication_selected": False}
+            state, notes, files = self._snapshot()
+            redirects, ids, destinations = {}, set(), set()
+            selected = []
+            for row in moves:
+                if (not isinstance(row, dict) or set(row) != {'note_id', 'destination', 'expected_hash'}
+                        or any(not isinstance(value, str) for value in row.values())):
+                    raise LibraryError('Each move requires note_id, destination and expected_hash only')
+                note = library._required(notes, row['note_id'])
+                library._expect(note, row['expected_hash'])
+                if note['properties']['kind'] != 'note':
+                    raise LibraryError('Only notes can be moved')
+                if (PurePosixPath(note['path']).stem.casefold() in _RESERVED_NAMES
+                        or any(p.casefold() in _CONFIG_FOLDERS for p in PurePosixPath(note['path']).parts)):
+                    raise LibraryError('Navigation/configuration files cannot be moved')
+                destination = self._destination(row['destination'])
+                if note['id'] in ids or destination in destinations:
+                    raise LibraryError('Duplicate move identity or destination')
+                ids.add(note['id']); destinations.add(destination)
+                redirects[note['path']] = destination
+                selected.append(note)
+            if any(str(parent) in destinations for destination in destinations
+                   for parent in PurePosixPath(destination).parents):
+                raise LibraryError('A batch destination cannot be another destination parent')
+            writes, updated, links = self._changes(state, notes, files, redirects, remember=False)
+            token = self._token({'operation': 'move', 'moves': moves}, state, files)
+            result = {'applied': apply, 'token': token, 'moves': [
+                {'id': n['id'], 'previous_path': n['path'], 'path': updated[n['id']]['path'],
+                 'sha256': updated[n['id']]['sha256'], 'content_unchanged': n['markdown'] == updated[n['id']]['markdown']}
+                for n in selected], 'links_updated': links, 'publication_selected': False}
+            if not apply:
+                return result | {'status': 'preview'}
+            if expected_token is not None and expected_token != token:
+                raise LibraryError('Organization preview changed; preview again before applying')
+            self._retain(state, notes, updated, ids)
+            library._commit(state, writes, [(n['path'], n['sha256']) for n in selected])
+            verified = self._readback(updated) and all(not library._path(n['path']).exists() for n in selected)
+            return result | {'status': 'completed' if verified else 'needs_review', 'readback_verified': verified}
 
     def _unmapped_sources(self, state, source_ids):
         forbidden = set(state["publications"])
@@ -285,7 +355,8 @@ class LibraryActions:
         if forbidden.intersection(source_ids):
             raise LibraryError("Cannot merge a published or website-mapped source")
 
-    def merge(self, target_id, source_ids: list[str], markdown: str, expected_hashes: dict[str, str], *, allow_work_target=False) -> dict:
+    def merge(self, target_id, source_ids: list[str], markdown: str, expected_hashes: dict[str, str], *, allow_work_target=False,
+              apply=True, expected_token=None) -> dict:
         if (not isinstance(source_ids, list) or not source_ids or not all(isinstance(item, str) for item in source_ids)
                 or len(source_ids) != len(set(source_ids)) or target_id in source_ids):
             raise LibraryError("Merge requires distinct source IDs excluding the target")
@@ -293,8 +364,7 @@ class LibraryActions:
             raise LibraryError("Merge requires expected SHA256 for target and every source")
         library = self.library
         with library._lock():
-            state = library._load()
-            notes = library._scan(state)
+            state, notes, files = self._snapshot()
             target = library._required(notes, target_id)
             sources = [library._required(notes, note_id) for note_id in source_ids]
             for note in [target, *sources]:
@@ -305,13 +375,21 @@ class LibraryActions:
             if json.dumps(_frontmatter(markdown), sort_keys=True) != json.dumps(target["properties"], sort_keys=True):
                 raise LibraryError("Merged Markdown must preserve all target properties, including id and kind")
             self._unmapped_sources(state, source_ids)
-            files = self._files(notes)
             redirects = {note["path"]: target["path"] for note in sources}
             writes, updated, links = self._changes(state, notes, files, redirects,
-                                                   replacement={target["path"]: markdown}, removed=set(redirects))
+                                                   replacement={target["path"]: markdown}, removed=set(redirects), remember=False)
             current = updated.get(target_id, target)
             if json.dumps(current["properties"], sort_keys=True) != json.dumps(target["properties"], sort_keys=True):
                 raise LibraryError("Link redirection would change target properties; review the merge")
+            token = self._token({'operation': 'merge', 'target_id': target_id, 'source_ids': source_ids,
+                                 'markdown': markdown, 'expected_hashes': expected_hashes}, state, files)
+            if not apply:
+                return {'applied': False, 'status': 'preview', 'token': token, 'target_id': target_id,
+                        'path': target['path'], 'source_ids': source_ids, 'sha256': current['sha256'],
+                        'links_updated': links, 'publication_selected': False}
+            if expected_token is not None and token != expected_token:
+                raise LibraryError('Organization preview changed; preview again before applying')
+            self._retain(state, notes, updated, source_ids)
             moment = _now()
             provenance = []
             for source in sources:
@@ -345,6 +423,15 @@ class LibraryActions:
             state["notes"][target_id].setdefault("merges", []).append({"at": moment, "sources": provenance,
                                                                         "sha256": current["sha256"]})
             library._commit(state, writes, [(note["path"], note["sha256"]) for note in sources])
+            try:
+                recoverable = all(not library._path(n['path']).exists() and
+                    _hash(_read(library._path(f".markdown-library/trash/{n['id']}.md"))) == n['sha256']
+                    for n in sources)
+            except (LibraryError, OSError):
+                recoverable = False
+            verified = self._readback(updated) and recoverable
             return {"id": target_id, "target_id": target_id, "path": target["path"], "sha256": current["sha256"],
                     "source_ids": list(source_ids), "sources": copy.deepcopy(provenance),
-                    "links_updated": links, "publication_selected": False}
+                    "links_updated": links, "publication_selected": False, 'applied': True, 'token': token,
+                    'readback_verified': verified, 'sources_recoverable': recoverable,
+                    'status': 'completed' if verified else 'needs_review'}

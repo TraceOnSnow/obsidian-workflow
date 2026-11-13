@@ -6,7 +6,6 @@ content operations, never a shell, credential reader, or publication endpoint.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 from pathlib import Path
 import re
 from typing import Any
@@ -57,28 +56,10 @@ def summary(note):
 
 
 def refresh_navigation(library):
-    """Reuse the existing generator; a navigation failure cannot undo a saved action."""
-    script = Path(__file__).resolve().parents[2] / 'scripts/library-navigation.py'
+    """Compatibility wrapper; both transports share the same guarded refresher."""
+    from .navigation import refresh_navigation as refresh
     try:
-        spec = importlib.util.spec_from_file_location('library_topic_navigation', script)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        with library._lock():
-            state = library._load()
-            notes = library._scan(state)
-            outputs = module.generate(library.vault, list(notes.values()))
-            writes = []
-            for relative, content in outputs.items():
-                target = library._path(relative)
-                previous = target.read_text() if target.exists() else None
-                if previous == content:
-                    continue
-                if previous is not None and not previous.startswith(module.MARKER):
-                    raise LibraryError('Existing user navigation retained')
-                from .core import _hash
-                writes.append((relative, content, _hash(previous) if previous is not None else None))
-            library._commit(state, writes)
-        return {'state': 'refreshed', 'changed': [relative for relative, _, _ in writes]}
+        return refresh(library)
     except (OSError, LibraryError, ValueError, ImportError):
         return {'state': 'needs_refresh', 'message': 'Content operation succeeded; existing navigation retained. Refresh locally after review.'}
 
@@ -110,25 +91,24 @@ def build_server(vault: str | Path, *, read_only=False, fastmcp_options=None):
     @tool(annotations=read, title='读取内容库使用规则')
     def get_workflow() -> dict[str, Any]:
         """Use before writing or organizing notes; returns the current library skill workflow."""
-        return {'instructions': WORKFLOW, 'read_only': read_only,
+        policy = library._path('config/整理与发表规约.md')
+        instructions = policy.read_text() if policy.is_file() else WORKFLOW
+        return {'instructions': instructions, 'read_only': read_only,
+                'instruction_source': 'config/整理与发表规约.md' if policy.is_file() else 'builtin-fallback',
                 'website_publication_available': False}
 
     @tool(annotations=read, title='搜索笔记和作品')
     def search_notes(query: str = '', kind: str | None = None,
                      folder: str | None = None, limit: int = 20, offset: int = 0) -> dict[str, Any]:
         """Find managed notes by text, kind or folder. Returns IDs and hashes, not full private bodies."""
-        if kind not in (None, 'note', 'work', 'post') or not 1 <= limit <= 50 or offset < 0:
-            raise LibraryError('Use kind note/work/post, limit 1..50, and nonnegative offset')
-        if len(query) > 500 or (folder is not None and (
-                Path(folder).is_absolute() or any(p.startswith('.') for p in Path(folder).parts))):
-            raise LibraryError('Invalid query or visible folder scope')
-        prefix = folder.rstrip('/') + '/' if folder else None
-        notes = [n for n in library.list_notes(query)
-                 if (kind is None or n['properties']['kind'] == kind)
-                 and (prefix is None or n['path'].startswith(prefix))]
-        return {'total': len(notes), 'offset': offset,
-                'items': [summary(n) for n in notes[offset:offset + limit]],
-                'next_offset': offset + limit if offset + limit < len(notes) else None}
+        from .note_queries import search_notes as search
+        return search(library, query, kind=kind, folder=folder, limit=limit, offset=offset)
+
+    @tool(annotations=read, title='定位笔记来源')
+    def note_sources(note_id: str) -> dict[str, Any]:
+        """Read only this note's recorded source IDs and merge redirects, never arbitrary state files."""
+        from .note_queries import note_sources as sources
+        return sources(library, note_id)
 
     @tool(annotations=read, title='读取当前稿')
     def get_note(note_id: str) -> dict[str, Any]:
@@ -147,6 +127,16 @@ def build_server(vault: str | Path, *, read_only=False, fastmcp_options=None):
         return {'id': note_id, 'history': library.history(note_id)}
 
     if not read_only:
+        @tool(annotations=write, title='预览或执行笔记整理')
+        def organize_notes(request: dict[str, Any] | None = None, schema: bool = False,
+                           apply: bool = False, expected_token: str | None = None) -> dict[str, Any]:
+            """Get schema, preview atomic moves/merge, then apply with the returned token and current hashes."""
+            from .organize import REQUEST_SCHEMA, organize
+            if schema:
+                if request is not None or apply or expected_token:
+                    raise LibraryError('Schema cannot be combined with an operation')
+                return REQUEST_SCHEMA
+            return organize(library, request, apply=apply, expected_token=expected_token)
         @tool(annotations=write, title='保存新私人笔记')
         def create_note(title: str, markdown: str, source_id: str) -> dict[str, Any]:
             """Save explicitly supplied content as a private note. Reuse source_id on retry to prevent duplicates."""

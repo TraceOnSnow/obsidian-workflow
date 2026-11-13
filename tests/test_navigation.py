@@ -89,6 +89,7 @@ class NavigationTests(unittest.TestCase):
             vault = Path(temporary) / 'vault'
             library = Library.initialize(vault)
             library.create('A recognized seed', title='Seed', path='05_想法池/Seed.md')
+            library.create('A game idea', title='Game', path='25_游戏设计/Game.md')
             library.create('Unreviewed material', title='Raw', path='00_收件箱/Raw.md')
             outputs = navigation.generate(vault, [])
             install(vault, outputs)
@@ -96,6 +97,10 @@ class NavigationTests(unittest.TestCase):
             self.assertEqual(evaluate_bases(vault, [base])[base], ['05_想法池/Seed.md'])
             self.assertIn('05_想法池/索引', outputs['首页.md'])
             self.assertIn('05_想法池/索引', outputs['笔记目录.md'])
+            game_base = '25_游戏设计/实时目录.base'
+            self.assertEqual(evaluate_bases(vault, [game_base])[game_base], ['25_游戏设计/Game.md'])
+            self.assertIn('25_游戏设计/索引', outputs['首页.md'])
+            self.assertIn('25_游戏设计/索引', outputs['笔记目录.md'])
 
     def test_generated_empty_category_retires_but_manual_index_remains(self):
         with tempfile.TemporaryDirectory() as temporary:
