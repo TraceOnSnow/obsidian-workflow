@@ -47,7 +47,7 @@ class OrganizationTests(unittest.TestCase):
         self.assertIn('[[25_游戏设计/B|B]]', self.library.get(self.a['id'])['markdown'])
         self.assertEqual(self.library.get(self.b['id'])['markdown'], self.b['markdown'])
         self.assertFalse(result['publication_selected'])
-        self.assertTrue((self.vault / '25_游戏设计/实时目录.base').is_file())
+        self.assertFalse((self.vault / '25_游戏设计/实时目录.base').exists())
         self.assertFalse(json.loads((self.vault / '.markdown-library/state.json').read_text())['publications'])
 
     def test_invalid_later_move_leaves_the_entire_batch_untouched(self):
@@ -122,7 +122,7 @@ class OrganizationTests(unittest.TestCase):
         self.assertEqual(result['navigation']['state'], 'refreshed')
         self.assertEqual((topic / '实时目录.base').read_text(), 'My base layout')
         self.assertEqual((self.vault / '首页.md').read_text(), 'My home')
-        self.assertTrue((topic / '索引.md').exists())
+        self.assertFalse((topic / '索引.md').exists())
         refreshed = refresh_navigation(self.library)
         self.assertIn('首页.md', refreshed['preserved'])
         self.assertFalse((self.vault / 'Blogs').exists())

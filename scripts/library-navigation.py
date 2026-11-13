@@ -17,21 +17,16 @@ from markdown_library.bootstrap import _index
 MARKER = '<!-- markdown-library:topic-navigation:v1 -->'
 BASE_MARKER = '# markdown-library:topic-base:v1; installed once, user editable'
 ROOTS = ['00_收件箱', '05_想法池', '10_个人记录', '20_项目与构想', '25_游戏设计', '30_知识与参考', '90_归档']
+# Only these working folders get a generated page and live Base (2026-11-13).
+# Topic folders are browsed in Obsidian's file explorer and the all-notes Base;
+# Works and 发表稿 keep their own index generator.
+PAGE_FOLDERS = ('00_收件箱', '05_想法池')
 BASE_NAME = '实时目录.base'
 INBOX_BASE = '00_收件箱/待整理（实时）.base'
 ALL_BASE = '全部笔记.base'
 RESERVED_ROOTS = {'works', '发表稿', 'posts', 'notes', 'copilot', 'assets', 'config', 'templates'}
 UTILITY_NAMES = ('索引', '首页', '笔记目录', '网站内容', '发布与同步状态', '使用说明',
                  'Copilot库内助手', 'AGENTS', 'CLAUDE', 'HANDOFF', 'PLAN', 'README', 'SKILL')
-# Keep the existing article topic routes, evaluated live only for the posts
-# namespace. A post moved into a topic folder follows its physical destination.
-POST_ROUTES = [
-    ('30_知识与参考/算法与编程/Codeforces', 'formula.title.startsWith("Codeforces")'),
-    ('30_知识与参考/算法与编程/OA 准备', 'formula.title.contains("Python OA")'),
-    ('30_知识与参考/技术与工具', 'formula.title.contains("Markdown")'),
-    ('90_归档/历史实践', 'formula.title.contains("博客的工作流")'),
-    ('10_个人记录/作品感想', 'true'),
-]
 
 
 def wiki(path, title):
@@ -58,12 +53,6 @@ def topic_scope(parent):
     scopes = [f'file.inFolder({literal(parent)})']
     if parent == '00_收件箱':
         scopes += ['file.inFolder("notes")', 'file.folder == ""']
-    previous = []
-    for route, condition in POST_ROUTES:
-        if route == parent or route.startswith(parent + '/'):
-            scopes.append('(file.inFolder("发表稿") && kind == "post" && '
-                          + ' && '.join([f'!({p})' for p in previous] + [condition]) + ')')
-        previous.append(condition)
     return {'or': scopes}
 
 
@@ -100,7 +89,7 @@ def discover(vault, items):
     Folder discovery installs convenient child entrances. It does not define
     Base membership: future files/subfolders appear in parent views immediately.
     """
-    parents = set(ROOTS) | {route for route, _ in POST_ROUTES}
+    parents = set(ROOTS)
     maps = {}
     indexed = {item['path']: item['properties'] for item in items}
     for directory, names, files in os.walk(vault, followlinks=False):
@@ -158,21 +147,13 @@ def generate(vault, items):
         if not (vault / relative).exists():
             outputs[relative] = content
 
-    for parent in parents:
+    for parent in PAGE_FOLDERS:
         base = INBOX_BASE if parent == '00_收件箱' else parent + '/' + BASE_NAME
         lines = [MARKER, '# ' + Path(parent).name, '', '[[首页|首页]] · [[笔记目录|全部主题]]', '']
         if parent == '00_收件箱':
             lines += ['这里保留仍需辨认、核对或梳理的材料。本人认领的初步想法可以进入想法池；完整成稿再归入主题目录，不把纯AI方案自动认领为本人想法。', '']
         if parent == '05_想法池':
             lines += ['这里保留已经认领、值得以后继续探索，但暂时不准备推进的想法。无需排期或补齐实现方案；想继续时再拿出来讨论。待核对材料仍在Inbox，完整文章和阶段设计留在主题目录。', '']
-        if parent == '25_游戏设计':
-            lines += ['这里先收已经认领的游戏点子和玩法雏形，不要求完整策划或开发排期。游戏设计观点、博客和作品感想暂不纳入。', '']
-        if parent.startswith('90_归档'):
-            lines += ['这里保留历史记录。文中的配置和操作描述属于当时背景，使用前核对当前环境。', '']
-        children = [p for p in parents if str(Path(p).parent) == parent]
-        lines += ['- ' + wiki(p + '/索引.md', Path(p).name) for p in children]
-        if children:
-            lines.append('')
         featured = {path: title for path, title in maps.items() if str(Path(path).parent) == parent}
         curated = {}
         # Retain manually chosen reading links (not just tagged map notes).
@@ -198,8 +179,6 @@ def generate(vault, items):
             lines.append('')
         lines += ['## 实时目录', '', f'![[{base}]]', '',
                   '新增、删除、重命名或移动笔记后，此目录由 Obsidian 自动更新。默认包含子文件夹；切换“按文件夹”查看归属。', '']
-        if parent == '20_项目与构想':
-            lines += ['主题目录保留已确认的阶段总结、当前设计和实践成稿；待确认构想与AI方案在Inbox继续整理。', '']
         outputs[parent + '/索引.md'] = '\n'.join(lines)
         install_base(base, native_base(topic_scope(parent), inbox=parent == '00_收件箱'))
 
@@ -208,12 +187,9 @@ def generate(vault, items):
         '## 日常入口', '',
         '- [[00_收件箱/索引|收件箱]]：需要本人补充、确认或继续梳理的材料。',
         '- [[05_想法池/索引|想法池]]：已经认领、暂未排期的想法。',
-        '- [[10_个人记录/索引|个人记录]]：求职与实习、日记、生活思考和作品感想。',
-        '- [[20_项目与构想/索引|项目与构想]]：按项目查看构想、设计和实践。',
-        '- [[25_游戏设计/索引|游戏设计]]：已认领的游戏点子和玩法雏形。',
-        '- [[30_知识与参考/索引|知识与参考]]：算法、模板、技术备忘和参考资料。',
         '- [[works/索引|作品表格]]：维护评分、进度与短感受。',
-        '- [[90_归档/索引|归档]]：历史资料与旧实践。', '',
+        '- [[笔记目录|全部笔记]]：按文件夹查看个人记录、项目、游戏设计、知识参考和归档。', '',
+        '主题文件夹直接在左侧文件栏浏览，不另设目录页。', '',
         '## 写作与发布', '',
         '- [[templates/README|记录模板]]：笔试、面试与感想正文的起点。',
         '- [[使用说明|使用说明]] · [[Copilot库内助手|Copilot 库内助手]]',
@@ -229,16 +205,11 @@ def generate(vault, items):
     home = vault / '首页.md'
     if home.is_file() and home.read_text().startswith(MARKER):
         outputs['首页.md'] = home.read_text()
-    extra_roots = sorted(parent for parent in parents if '/' not in parent and parent not in ROOTS and parent != 'Blogs')
-    outputs['笔记目录.md'] = MARKER + '\n# 全部主题\n\n[[首页|返回首页]]\n\n' + '\n'.join(
-        '- ' + wiki(root + '/索引.md', Path(root).name.split('_', 1)[-1]) for root in ROOTS + extra_roots
-    ) + '\n- [[works/索引|作品表格]]\n- [[发表稿/索引|网站文章]]\n\n## 全部笔记（实时）\n\n' + f'![[{ALL_BASE}]]\n'
+    outputs['笔记目录.md'] = (MARKER + '\n# 全部笔记\n\n[[首页|返回首页]]\n\n'
+        '- [[00_收件箱/索引|收件箱]]\n- [[05_想法池/索引|想法池]]\n- [[works/索引|作品表格]]\n- [[发表稿/索引|网站文章]]\n\n'
+        '主题文件夹直接在左侧文件栏浏览；下方切换“按文件夹”可按实际路径查看。\n\n'
+        '## 全部笔记（实时）\n\n' + f'![[{ALL_BASE}]]\n')
     install_base(ALL_BASE, native_base())
-    # A legacy entrance remains stable, and any later ordinary Blogs content is
-    # still visible through its live Base rather than a frozen migration claim.
-    blog_base = 'Blogs/' + BASE_NAME
-    outputs['Blogs/索引.md'] = MARKER + '\n# Blogs\n\n[[首页|返回首页]] · [[笔记目录|全部主题]]\n\n- [[30_知识与参考/索引|竞赛文章、模板与技术参考]]\n- [[10_个人记录/求职与实习/索引|笔试与面试记录]]\n- [[90_归档/索引|历史博客实践]]\n\n' + f'![[{blog_base}]]\n\n旧配图继续保留原位置，已有网站文章保留身份、关联和发布版本。\n'
-    install_base(blog_base, native_base(topic_scope('Blogs')))
     return outputs
 
 

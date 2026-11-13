@@ -83,7 +83,7 @@ def maintain(library, *, project, manifest, apply=False, expected_token=None, ac
             # Maintenance is restricted to utility documents and templates,
             # never regular notes, Works, Posts or Obsidian credentials/settings.
             fixed = {'首页.md', '笔记目录.md', '网站内容.md', '使用说明.md', 'AGENTS.md', 'CLAUDE.md',
-                     'Copilot库内助手.md', '发表稿/索引.md', '00_收件箱/索引.md', '05_想法池/索引.md', '25_游戏设计/索引.md',
+                     'Copilot库内助手.md', '发表稿/索引.md', '00_收件箱/索引.md', '05_想法池/索引.md',
                      'config/editorial-workflow.json'}
             if relative not in fixed and not relative.startswith(('templates/', 'config/', 'copilot/skills/personal-library/')):
                 raise LibraryError('Not a maintained utility target: ' + relative)

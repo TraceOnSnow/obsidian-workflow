@@ -71,9 +71,7 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                 moved = await self.call(session, 'move_note', {'note_id': note_id,
                     'destination': '20_项目与构想/协议验收/主稿.md', 'expected_hash': note['sha256']})
                 self.assertEqual(moved['navigation']['state'], 'refreshed')
-                navigation = (self.vault / '20_项目与构想/协议验收/索引.md').read_text()
-                self.assertIn('![[20_项目与构想/协议验收/实时目录.base]]', navigation)
-                self.assertNotIn('主稿', navigation)
+                self.assertFalse((self.vault / '20_项目与构想/协议验收/索引.md').exists())
                 source = await self.call(session, 'create_note', {'title': '合并来源',
                     'markdown': '来源独有细节。', 'source_id': 'test:002'})
                 merged = await self.call(session, 'merge_notes', {'target_id': note_id,

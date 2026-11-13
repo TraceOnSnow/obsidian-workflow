@@ -97,43 +97,46 @@ class NavigationTests(unittest.TestCase):
             self.assertEqual(evaluate_bases(vault, [base])[base], ['05_想法池/Seed.md'])
             self.assertIn('05_想法池/索引', outputs['首页.md'])
             self.assertIn('05_想法池/索引', outputs['笔记目录.md'])
-            game_base = '25_游戏设计/实时目录.base'
-            self.assertEqual(evaluate_bases(vault, [game_base])[game_base], ['25_游戏设计/Game.md'])
-            self.assertIn('25_游戏设计/索引', outputs['首页.md'])
-            self.assertIn('25_游戏设计/索引', outputs['笔记目录.md'])
+            # Topic folders are browsed in the file explorer; no page or Base is generated.
+            self.assertNotIn('25_游戏设计/索引.md', outputs)
+            self.assertNotIn('25_游戏设计/实时目录.base', outputs)
+            self.assertNotIn('25_游戏设计/索引', outputs['首页.md'] + outputs['笔记目录.md'])
+            rows = evaluate_bases(vault, [navigation.ALL_BASE])[navigation.ALL_BASE]
+            self.assertIn('25_游戏设计/Game.md', rows)
 
-    def test_generated_empty_category_retires_but_manual_index_remains(self):
+    def test_only_working_folders_get_pages_and_manual_index_is_untouched(self):
         with tempfile.TemporaryDirectory() as temporary:
             vault = Path(temporary) / 'vault'
             Library.initialize(vault)
             generated = vault / '20_项目与构想/Old draft'
             generated.mkdir(parents=True)
             (generated / '索引.md').write_text(navigation.MARKER + '\n# Old draft\n')
-            (generated / '实时目录.base').write_text(navigation.native_base())
             manual = vault / '20_项目与构想/Manual guide'
             manual.mkdir(parents=True)
             (manual / '索引.md').write_text('# My maintained project guide\n')
             outputs = navigation.generate(vault, [])
-            self.assertNotIn('20_项目与构想/Old draft/索引.md', outputs)
-            self.assertIn('20_项目与构想/Manual guide/索引.md', outputs)
+            pages = {path for path in outputs if path.endswith('索引.md')}
+            self.assertEqual(pages, {'00_收件箱/索引.md', '05_想法池/索引.md'})
+            self.assertFalse(any(path.endswith(navigation.BASE_NAME) for path in outputs if not path.startswith('05_想法池/')))
+            self.assertEqual((manual / '索引.md').read_text(), '# My maintained project guide\n')
 
     def test_curated_topic_links_survive_refresh_but_inbox_entrances_do_not(self):
         with tempfile.TemporaryDirectory() as temporary:
             vault = Path(temporary) / 'vault'
             Library.initialize(vault)
-            folder = vault / '20_项目与构想/Project'
-            folder.mkdir(parents=True)
-            (folder / 'Practice.md').write_text('# Completed practice\n')
-            (folder / 'Other.md').write_text('# Another completed record\n')
+            folder = vault / '05_想法池'
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / 'Practice.md').write_text('# A seed\n')
+            (folder / 'Other.md').write_text('# Another seed\n')
             (vault / '00_收件箱').mkdir(exist_ok=True)
             (vault / '00_收件箱/Draft.md').write_text('# Pending draft\n')
             (folder / '索引.md').write_text(navigation.MARKER + '\n## 从这里开始读\n\n'
-                '- [[20_项目与构想/Project/Other|Z first by choice]]\n'
-                '- [[20_项目与构想/Project/Practice|Curated practice]]\n'
+                '- [[05_想法池/Other|Z first by choice]]\n'
+                '- [[05_想法池/Practice|Curated practice]]\n'
                 '- [[00_收件箱/Draft|Pending draft]]\n\n## 实时目录\n')
             outputs = navigation.generate(vault, [])
-            index = outputs['20_项目与构想/Project/索引.md']
-            self.assertIn('Project/Practice|Curated practice', index)
+            index = outputs['05_想法池/索引.md']
+            self.assertIn('05_想法池/Practice|Curated practice', index)
             self.assertNotIn('00_收件箱/Draft', index)
             self.assertLess(index.index('Z first by choice'), index.index('Curated practice'))
 
@@ -251,16 +254,12 @@ class NavigationTests(unittest.TestCase):
             route=library.create('Question route',title='Read here',properties={'tags':['主题导航']},
                                  path='20_项目与构想/Test/Route.md')
             ordinary=library.create('Original detail',title='Details',path='20_项目与构想/Test/Details.md')
-            library.create('Only a route',title='Map only',properties={'tags':['主题导航']},
-                           path='20_项目与构想/OnlyMap/Route.md')
             subprocess.run([sys.executable,str(Path(__file__).resolve().parents[1]/'scripts/library-navigation.py'),
                 '--vault',str(vault),'--apply'],capture_output=True,text=True,check=True)
-            topic=(vault/'20_项目与构想/Test/索引.md').read_text()
-            self.assertLess(topic.index('Route|Read here'),topic.index('## 实时目录'))
-            self.assertEqual(topic.count('Route|Read here'),1)
-            self.assertIn('Route|Read here',(vault/'首页.md').read_text())
-            self.assertNotIn('Details|Details',topic)
-            self.assertNotIn('## 笔记',(vault/'20_项目与构想/OnlyMap/索引.md').read_text())
+            home=(vault/'首页.md').read_text()
+            self.assertEqual(home.count('Route|Read here'),1)
+            self.assertNotIn('Details|Details',home)
+            self.assertFalse((vault/'20_项目与构想/Test/索引.md').exists())
             self.assertEqual(library.get(route['id'])['sha256'],route['sha256'])
             self.assertEqual(library.get(ordinary['id'])['sha256'],ordinary['sha256'])
 
@@ -268,27 +267,26 @@ class NavigationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             vault = Path(temporary) / 'vault'
             library = Library.initialize(vault)
-            library.create('Body', title='Existing', path='10_个人记录/生活与思考/Existing.md')
+            library.create('Body', title='Existing', path='05_想法池/Existing.md')
             outputs = navigation.generate(vault, library.list_notes())
             install(vault, outputs)
-            base = '10_个人记录/实时目录.base'
-            child = '10_个人记录/生活与思考/实时目录.base'
-            project = '20_项目与构想/实时目录.base'
-            bases = [base, child, project, navigation.ALL_BASE, navigation.INBOX_BASE]
+            ideas = '05_想法池/实时目录.base'
+            bases = [ideas, navigation.ALL_BASE, navigation.INBOX_BASE]
             before = {path: (vault / path).read_bytes() for path in bases}
-            fresh = vault / '10_个人记录/生活与思考/New.md'
+            fresh = vault / '05_想法池/Nested/New.md'
+            fresh.parent.mkdir(parents=True)
             fresh.write_text('A new ordinary note without identity or kind')
             rows = evaluate_bases(vault, bases)
-            for path in [base, child, navigation.ALL_BASE]:
-                self.assertIn(fresh.relative_to(vault).as_posix(), rows[path])
+            for path in [ideas, navigation.ALL_BASE]:
+                self.assertIn('05_想法池/Nested/New.md', rows[path])
             moved = vault / '20_项目与构想/Future/Nested/Renamed.md'
             moved.parent.mkdir(parents=True)
             fresh.rename(moved)
             rows = evaluate_bases(vault, bases)
-            self.assertNotIn('10_个人记录/生活与思考/New.md', rows[base])
-            self.assertIn('20_项目与构想/Future/Nested/Renamed.md', rows[project])
+            self.assertNotIn('05_想法池/Nested/New.md', rows[ideas])
+            self.assertIn('20_项目与构想/Future/Nested/Renamed.md', rows[navigation.ALL_BASE])
             moved.unlink()
-            self.assertNotIn('20_项目与构想/Future/Nested/Renamed.md', evaluate_bases(vault, bases)[project])
+            self.assertNotIn('20_项目与构想/Future/Nested/Renamed.md', evaluate_bases(vault, bases)[navigation.ALL_BASE])
             for path, content in before.items():
                 self.assertEqual((vault / path).read_bytes(), content)
 
@@ -307,47 +305,24 @@ class NavigationTests(unittest.TestCase):
             for values in rows.values():
                 self.assertEqual(set(values), {'notes/New/Ordinary.md', '00_收件箱/New.md', 'Loose.md'})
 
-    def test_every_ordinary_folder_gets_an_independent_live_directory(self):
+    def test_topic_folders_get_no_generated_directory_but_stay_in_all_notes(self):
         with tempfile.TemporaryDirectory() as temporary:
             vault = Path(temporary) / 'vault'
             Library.initialize(vault)
-            for path in ['10_个人记录/日记/A.md', '20_项目与构想/方案/细节/B.md',
-                         '30_知识与参考/算法与编程/模板/C.md', '90_归档/旧记录/D.md', '简历/面试复盘/E.md']:
+            notes = ['10_个人记录/日记/A.md', '20_项目与构想/方案/细节/B.md',
+                     '30_知识与参考/算法与编程/模板/C.md', '90_归档/旧记录/D.md', '简历/面试复盘/E.md']
+            for path in notes:
                 target = vault / path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text('Ordinary unmanaged note')
             outputs = navigation.generate(vault, [])
             install(vault, outputs)
-            expected = ['10_个人记录/日记', '20_项目与构想/方案', '20_项目与构想/方案/细节',
-                        '30_知识与参考/算法与编程/模板', '90_归档/旧记录', '简历/面试复盘']
-            for folder in expected:
-                self.assertIn(folder + '/索引.md', outputs)
-                self.assertIn(folder + '/实时目录.base', outputs)
-            self.assertIn('简历/索引', outputs['笔记目录.md'])
-            bases = [folder + '/实时目录.base' for folder in expected]
-            rows = evaluate_bases(vault, bases)
-            self.assertTrue(all(len(values) == 1 for values in rows.values()))
-
-    def test_native_post_routes_change_live_and_physical_move_wins(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            vault = Path(temporary) / 'vault'
-            library = Library.initialize(vault)
-            post = library.create('Post body', title='Codeforces Round', kind='post', path='发表稿/Post.md')
-            install(vault, navigation.generate(vault, library.list_notes()))
-            cf = '30_知识与参考/算法与编程/Codeforces/实时目录.base'
-            games = '10_个人记录/作品感想/实时目录.base'
-            projects = '20_项目与构想/实时目录.base'
-            bases = [cf, games, projects]
-            self.assertEqual(evaluate_bases(vault, bases)[cf], ['发表稿/Post.md'])
-            target = vault / '发表稿/Post.md'
-            target.write_text(target.read_text().replace('title: Codeforces Round', 'title: Game impression'))
-            rows = evaluate_bases(vault, bases)
-            self.assertEqual(rows[cf], [])
-            self.assertEqual(rows[games], ['发表稿/Post.md'])
-            target.rename(vault / '20_项目与构想/Moved.md')
-            rows = evaluate_bases(vault, bases)
-            self.assertEqual(rows[games], [])
-            self.assertEqual(rows[projects], ['20_项目与构想/Moved.md'])
+            for path in notes:
+                folder = str(Path(path).parent)
+                self.assertNotIn(folder + '/索引.md', outputs)
+                self.assertNotIn(folder + '/实时目录.base', outputs)
+            rows = evaluate_bases(vault, [navigation.ALL_BASE])[navigation.ALL_BASE]
+            self.assertTrue(set(notes) <= set(rows))
 
     def test_all_existing_base_layouts_and_legacy_inbox_are_preserved(self):
         with tempfile.TemporaryDirectory() as temporary:
