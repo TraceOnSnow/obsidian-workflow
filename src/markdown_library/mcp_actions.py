@@ -15,7 +15,7 @@ import re
 from urllib.parse import quote, unquote
 from uuid import uuid4
 
-from .core import Library, LibraryError, _hash, _now, _read, _registration_frontmatter, _split
+from .core import Library, LibraryError, _hash, _now, _read, _registration_frontmatter, _render, _split
 
 
 _ROOTS = {"00_收件箱", "05_想法池", "notes", "10_个人记录", "20_项目与构想", "25_游戏设计", "30_知识与参考", "90_归档"}
@@ -187,8 +187,18 @@ class LibraryActions:
         return state, notes, self._files(notes)
 
     def _token(self, request, state, files):
+        fingerprints = {}
+        for path, file in files.items():
+            if file.get('virtual'):
+                # Logical Work views have no physical Markdown file. Their
+                # property order may differ between Python processes; compare
+                # the values and body, not generated YAML key order.
+                properties, body = _split(file['markdown'])
+                fingerprints[path] = _hash(json.dumps([properties, body], ensure_ascii=False, sort_keys=True))
+            else:
+                fingerprints[path] = file['sha256']
         return _hash(json.dumps({'version': 1, 'vault': str(self.library.vault.resolve()),
-            'request': request, 'files': {p: f['sha256'] for p, f in files.items()},
+            'request': request, 'files': fingerprints,
             'sources': state['sources'], 'publications': state['publications']},
             ensure_ascii=False, sort_keys=True))
 
@@ -290,12 +300,13 @@ class LibraryActions:
         library = self.library
         with library._lock():
             state, notes, files = self._snapshot()
-            redirects, ids, destinations = {}, set(), set()
+            redirects, ids, destinations, replacements = {}, set(), set(), {}
             selected = []
             for row in moves:
-                if (not isinstance(row, dict) or set(row) != {'note_id', 'destination', 'expected_hash'}
+                required = {'note_id', 'destination', 'expected_hash'}
+                if (not isinstance(row, dict) or not required.issubset(row) or set(row) - required - {'title'}
                         or any(not isinstance(value, str) for value in row.values())):
-                    raise LibraryError('Each move requires note_id, destination and expected_hash only')
+                    raise LibraryError('Each move requires note_id, destination, expected_hash and optional title')
                 note = library._required(notes, row['note_id'])
                 library._expect(note, row['expected_hash'])
                 if note['properties']['kind'] != 'note':
@@ -303,7 +314,14 @@ class LibraryActions:
                 if (PurePosixPath(note['path']).stem.casefold() in _RESERVED_NAMES
                         or any(p.casefold() in _CONFIG_FOLDERS for p in PurePosixPath(note['path']).parts)):
                     raise LibraryError('Navigation/configuration files cannot be moved')
-                destination = self._destination(row['destination'])
+                if 'title' in row:
+                    if not row['title'].strip() or len(row['title']) > 200 or any(c in row['title'] for c in '\r\n\x00'):
+                        raise LibraryError('Title must be a nonempty single line up to 200 characters')
+                    properties, body = _split(note['markdown'])
+                    properties['title'] = row['title']
+                    replacements[note['path']] = _render(properties, body)
+                destination = (note['path'] if 'title' in row and row['destination'] == note['path']
+                               else self._destination(row['destination']))
                 if note['id'] in ids or destination in destinations:
                     raise LibraryError('Duplicate move identity or destination')
                 ids.add(note['id']); destinations.add(destination)
@@ -312,19 +330,23 @@ class LibraryActions:
             if any(str(parent) in destinations for destination in destinations
                    for parent in PurePosixPath(destination).parents):
                 raise LibraryError('A batch destination cannot be another destination parent')
-            writes, updated, links = self._changes(state, notes, files, redirects, remember=False)
+            writes, updated, links = self._changes(state, notes, files, redirects,
+                                                   replacement=replacements, remember=False)
             token = self._token({'operation': 'move', 'moves': moves}, state, files)
             result = {'applied': apply, 'token': token, 'moves': [
                 {'id': n['id'], 'previous_path': n['path'], 'path': updated[n['id']]['path'],
-                 'sha256': updated[n['id']]['sha256'], 'content_unchanged': n['markdown'] == updated[n['id']]['markdown']}
+                 'title': updated[n['id']]['properties']['title'],
+                 'sha256': updated[n['id']]['sha256'], 'content_unchanged': n['markdown'] == updated[n['id']]['markdown'],
+                 'body_unchanged': _split(n['markdown'])[1] == _split(updated[n['id']]['markdown'])[1]}
                 for n in selected], 'links_updated': links, 'publication_selected': False}
             if not apply:
                 return result | {'status': 'preview'}
             if expected_token is not None and expected_token != token:
                 raise LibraryError('Organization preview changed; preview again before applying')
             self._retain(state, notes, updated, ids)
-            library._commit(state, writes, [(n['path'], n['sha256']) for n in selected])
-            verified = self._readback(updated) and all(not library._path(n['path']).exists() for n in selected)
+            relocated = [n for n in selected if redirects[n['path']] != n['path']]
+            library._commit(state, writes, [(n['path'], n['sha256']) for n in relocated])
+            verified = self._readback(updated) and all(not library._path(n['path']).exists() for n in relocated)
             return result | {'status': 'completed' if verified else 'needs_review', 'readback_verified': verified}
 
     def _unmapped_sources(self, state, source_ids):

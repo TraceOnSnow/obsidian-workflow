@@ -26,6 +26,8 @@ description: 管理明确指定的 Markdown/Obsidian 内容库，维护笔记、
 
 移动与合并统一用 `organize --schema` 获取请求结构，以 `--request FILE` 或 `--request -` 只读预览，按当前授权加 `--apply --expected-token TOKEN` 执行。移动清单一次最多100篇、共用事务；合并保留来源及可恢复旧稿。CLI的 `move`／`merge` 也支持同一请求流程；MCP用 `organize_notes`。工具自行修复链接、回读并更新相关目录。结果中的正文保存与目录刷新分别判断；目录失败只重试 `navigation --scope FOLDER`，不要重复移动／合并。人工索引及既有Base布局保留，不能因个别索引保留而宣称整批失败。协议和来源续读见[操作说明](../../docs/content-operations.md)。
 
+只需简化文件名和显示标题时，在移动项中填写`destination`与可选`title`，用程序返回的`body_unchanged`核对正文保持；只改显示标题可沿用原destination。不要为结构改名重写整篇正文或临时处理frontmatter。
+
 区分待核对材料、已认领但暂不推进的想法、完整成稿／阶段设计。按当前库规约将它们分别放入Inbox、想法池和正式主题目录；未实现不等于未成稿，也不从AI方案推断本人认领。移动沿用原身份与链接，不为想法自动创建排期或待办。
 
 ## 作品与独立文章

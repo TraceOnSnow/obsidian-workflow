@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -7,6 +8,7 @@ import unittest
 
 from markdown_library import Library, LibraryError
 from markdown_library.cli import dispatch, parser
+from markdown_library.core import _hash, _render
 from markdown_library.mcp_actions import LibraryActions
 from markdown_library.navigation import refresh_navigation
 from markdown_library.note_queries import note_sources, source_messages
@@ -55,6 +57,19 @@ class OrganizationTests(unittest.TestCase):
         with self.assertRaises(LibraryError):
             organize(self.library, request, apply=True, expected_token='not-a-token')
         self.assertEqual(before, self.snapshot())
+
+    def test_short_title_and_filename_preserve_body_and_other_properties(self):
+        request = self.request()
+        request['moves'][0].update(destination='25_游戏设计/Short.md', title='Short')
+        request['moves'][1].update(destination=self.b['path'], title='Short B')
+        preview = organize(self.library, request)
+        result = organize(self.library, request, apply=True, expected_token=preview['token'])
+        self.assertTrue(result['readback_verified'])
+        self.assertTrue(all(row['body_unchanged'] for row in result['moves']))
+        for original, title in [(self.a, 'Short'), (self.b, 'Short B')]:
+            saved = self.library.get(original['id'])
+            self.assertEqual(saved['properties'], original['properties'] | {'title': title})
+        self.assertTrue((self.vault / self.b['path']).exists())
 
     def test_token_binds_new_backlinks_and_prevents_partial_moves(self):
         request = self.request()
@@ -119,6 +134,35 @@ class OrganizationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('oneOf', json.loads(result.stdout))
         self.assertFalse(missing.exists())
+
+    def test_cli_preview_and_apply_in_different_processes_with_virtual_works(self):
+        from markdown_library.work_catalog import backing_path, build_catalog, catalog_entry, row_from_note
+        state = self.library._read_state()
+        state['work_catalog'] = {'schema_version': 1, 'path': 'works/作品总表.md', 'rows': {}}
+        properties = {'id': 'virtual-work', 'kind': 'work', 'schema_version': 1,
+                      'title': 'Virtual game', 'type': 'game', 'rating': 85, 'status': 'completed'}
+        markdown = _render(properties, '')
+        work = {'id': properties['id'], 'path': 'works/virtual.md', 'properties': properties,
+                'markdown': markdown, 'sha256': _hash(markdown)}
+        state['work_catalog']['rows'][work['id']] = catalog_entry(work, None)
+        state['notes'][work['id']] = {'path': backing_path(state, work['id']), 'history': [],
+                                     'kind': 'work', 'deleted': False}
+        self.library._atomic(state['work_catalog']['path'], build_catalog([row_from_note(work, None)]))
+        self.library._save(state)
+        request_path = self.root / 'process-request.json'; request_path.write_text(json.dumps(self.request()))
+        command = [sys.executable, '-m', 'markdown_library', '--vault', str(self.vault),
+                   'organize', '--request', str(request_path)]
+        previews = []
+        for seed in ('1', '2'):
+            completed = subprocess.run(command, env=os.environ | {'PYTHONHASHSEED': seed},
+                                       capture_output=True, text=True, timeout=15)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            previews.append(json.loads(completed.stdout))
+        self.assertEqual(previews[0]['token'], previews[1]['token'])
+        applied = subprocess.run(command + ['--apply', '--expected-token', previews[0]['token']],
+                                 env=os.environ | {'PYTHONHASHSEED': '3'}, capture_output=True, text=True, timeout=15)
+        self.assertEqual(applied.returncode, 0, applied.stderr)
+        self.assertTrue(json.loads(applied.stdout)['readback_verified'])
 
     def test_cli_moves_and_navigation_require_review_token(self):
         request_path = self.root / 'request.json'

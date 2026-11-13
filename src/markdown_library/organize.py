@@ -7,7 +7,8 @@ from .navigation import after_organization
 MOVE_ITEM = {'type': 'object', 'additionalProperties': False,
     'required': ['note_id', 'destination', 'expected_hash'],
     'properties': {name: {'type': 'string', 'minLength': 1}
-                   for name in ('note_id', 'destination', 'expected_hash')}}
+                   for name in ('note_id', 'destination', 'expected_hash')} |
+                  {'title': {'type': 'string', 'minLength': 1, 'maxLength': 200}}}
 REQUEST_SCHEMA = {'$schema': 'https://json-schema.org/draft/2020-12/schema', 'oneOf': [
     {'type': 'object', 'additionalProperties': False, 'required': ['operation', 'moves'],
      'properties': {'operation': {'const': 'move'},

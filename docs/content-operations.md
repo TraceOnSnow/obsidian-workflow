@@ -57,6 +57,11 @@ The receipt includes final IDs, paths, hashes, link repair counts and
 or cross-links; `content_unchanged` reports exact byte identity, not semantic
 equivalence. Merge sources remain recoverable through the original lifecycle.
 
+A move item may also specify a short `title`. This changes only the frontmatter
+title and preserves the full body, including any authored heading; the receipt
+reports `body_unchanged`. To change just the display title, keep the same
+destination. To shorten both the filename and display title, supply both together.
+
 Directories refresh after the content transaction. A directory problem cannot
 undo the saved content operation: inspect the separate `navigation` result, and
 retry only the directory step, never the move/merge. Custom indexes and existing
