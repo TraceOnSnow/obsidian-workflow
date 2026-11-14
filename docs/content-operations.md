@@ -62,8 +62,9 @@ renames the local file and repairs links; its title, website link and
 publication state stay unchanged, and `title` is rejected for Posts (change a
 public title with `publish-article`).
 
-A Work with an existing review file can likewise be renamed within its current
-folder. Its catalog identity, title, daily fields and publication state remain
+A Work with an existing review file can likewise be moved within the configured
+review root (`works/感想/` by default), including type/year subfolders.
+Its catalog identity, title, daily fields and publication state remain
 unchanged; catalog-only Works and `title` changes are rejected. The same merge
 request can use a Work target, preserving all target properties while absorbing
 ordinary note sources and retaining their recoverable history.

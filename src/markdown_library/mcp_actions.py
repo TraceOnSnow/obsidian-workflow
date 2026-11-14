@@ -218,13 +218,15 @@ class LibraryActions:
         except (OSError, LibraryError):
             return False
 
-    def _destination(self, destination, *, folder=None):
+    def _destination(self, destination, *, folder=None, root=None):
         if not isinstance(destination, str) or not destination or "\\" in destination:
             raise LibraryError("Move requires a safe relative Markdown destination")
         path = PurePosixPath(destination)
         if folder is not None and str(path.parent) != folder:
             raise LibraryError("A Post can only be renamed inside " + folder)
-        if (path.is_absolute() or len(path.parts) < 2 or (folder is None and path.parts[0] not in _ROOTS)
+        if root is not None and not path.is_relative_to(PurePosixPath(root)):
+            raise LibraryError('Work reviews must remain inside ' + root)
+        if (path.is_absolute() or len(path.parts) < 2 or (folder is None and root is None and path.parts[0] not in _ROOTS)
                 or any(part.startswith(".") for part in path.parts)
                 or any(part.casefold() in _CONFIG_FOLDERS for part in path.parts)
                 or not destination.endswith(".md") or path.stem.casefold() in _RESERVED_NAMES
@@ -337,8 +339,9 @@ class LibraryActions:
                     replacements[note['path']] = _render(properties, body)
                 destination = (note['path'] if 'title' in row and row['destination'] == note['path']
                                else self._destination(row['destination'],
-                                                      folder=(str(PurePosixPath(note['path']).parent)
-                                                              if kind in {'post', 'work'} else None)))
+                                    folder=_POST_FOLDER if kind == 'post' else None,
+                                    root=(state.get('work_catalog', {}).get('review_root', 'works/感想')
+                                          if kind == 'work' else None)))
                 if note['id'] in ids or destination in destinations:
                     raise LibraryError('Duplicate move identity or destination')
                 ids.add(note['id']); destinations.add(destination)

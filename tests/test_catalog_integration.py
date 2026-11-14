@@ -57,7 +57,7 @@ class CatalogIntegrationTests(unittest.TestCase):
     def test_organize_renames_work_review_and_repairs_links_without_changing_fields(self):
         work = self.library.get(self.reviewed['id'])
         backlink = self.library.create('[[%s|Review]]' % work['path'][:-3], title='Backlink')
-        destination = str(Path(work['path']).with_name('Readable work.md'))
+        destination = 'works/感想/小说/2020/Readable work.md'
         request = {'operation': 'move', 'moves': [{'note_id': work['id'],
             'destination': destination, 'expected_hash': work['sha256']}]}
         before = self.snapshot()
@@ -75,12 +75,14 @@ class CatalogIntegrationTests(unittest.TestCase):
         self.assertIn(destination[:-3], next(r for r in row if r['id'] == work['id'])['values']['review'])
         self.assertEqual(self.library.publications(), [])
 
-    def test_organize_rejects_work_title_changes_cross_folder_moves_and_empty_reviews(self):
+    def test_organize_rejects_work_title_changes_moves_outside_review_root_and_empty_reviews(self):
         work = self.library.get(self.reviewed['id'])
         virtual = self.library.get(self.virtual['id'])
         for note, destination, extra in [
             (work, str(Path(work['path']).with_name('Changed.md')), {'title': 'Changed'}),
             (work, '00_收件箱/Changed.md', {}),
+            (work, 'works/Elsewhere.md', {}),
+            (work, 'works/感想/../Changed.md', {}),
             (virtual, 'works/Changed.md', {}),
         ]:
             before = self.snapshot()
@@ -88,6 +90,18 @@ class CatalogIntegrationTests(unittest.TestCase):
                 organize(self.library, {'operation': 'move', 'moves': [{'note_id': note['id'],
                     'destination': destination, 'expected_hash': note['sha256'], **extra}]})
             self.assertEqual(before, self.snapshot())
+
+    def test_work_move_conflict_does_not_partially_reorganize_reviews(self):
+        work = self.library.get(self.reviewed['id'])
+        request = {'operation': 'move', 'moves': [{'note_id': work['id'],
+            'destination': 'works/感想/小说/2020/Readable.md', 'expected_hash': work['sha256']}]}
+        preview = organize(self.library, request)
+        edited = self.library.replace(work['id'], work['markdown'] + '\nUser edit\n', expected_hash=work['sha256'])
+        before = self.snapshot()
+        with self.assertRaises(LibraryError):
+            organize(self.library, request, apply=True, expected_token=preview['token'])
+        self.assertEqual(before, self.snapshot())
+        self.assertEqual(self.library.get(work['id'])['sha256'], edited['sha256'])
 
     def test_organize_merges_note_into_catalog_work_and_retains_source(self):
         work = self.library.get(self.virtual['id'])
