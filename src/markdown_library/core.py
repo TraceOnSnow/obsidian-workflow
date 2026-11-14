@@ -348,7 +348,7 @@ class Library:
             record["history"].append({"sha256": digest, "observed_at": _now(), "action": action, "rating_scale": state.get("rating_scale", 10)})
         record.update({"path": note["path"], "sha256": digest, "kind": note["properties"]["kind"], "deleted": False})
 
-    def _scan(self, state):
+    def _scan(self, state, *, apply_catalog_defaults=True):
         from .work_catalog import enabled, scan_overlay
         catalog_enabled = enabled(state)
         found = {}
@@ -395,7 +395,7 @@ class Library:
                     self._remember(state, note, "observed")
         self._parsed_files = parsed_files
         if catalog_enabled:
-            found = scan_overlay(self, state, found, apply_defaults=True)
+            found = scan_overlay(self, state, found, apply_defaults=apply_catalog_defaults)
             for note in found.values():
                 if note.get("catalog_backed"):
                     self._remember(state, note, "observed")

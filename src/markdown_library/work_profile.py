@@ -96,7 +96,7 @@ def seed_steam_end(properties):
 
 
 def compact_works(library, *, apply=False, expected_token=None, seed_steam=False,
-                  steam_dates=None, note_ids=None):
+                  steam_dates=None, note_ids=None, apply_catalog_defaults=True):
     """One guarded batch; current drafts only, no selection or website writes."""
     from .bootstrap import _index
     steam_dates = dict(steam_dates or {})
@@ -144,7 +144,7 @@ def compact_works(library, *, apply=False, expected_token=None, seed_steam=False
     else:
         with library._lock():
             state = library._load()
-            notes = library._scan(state)
+            notes = library._scan(state, apply_catalog_defaults=apply_catalog_defaults)
             changes, outcomes, token = prepare(state, notes)
             if not expected_token or expected_token != token:
                 raise LibraryError('Work compaction preview expired; review again')

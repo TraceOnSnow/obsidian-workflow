@@ -8,12 +8,13 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+from copy import deepcopy
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from markdown_library import Library
 from markdown_library.core import _split
 from markdown_library.steam_review import parse_paste, review
-from markdown_library.work_profile import compact_works, website_properties
+from markdown_library.work_profile import compact_works, website_properties, seed_steam_end
 
 
 def hours(value):
@@ -72,7 +73,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--vault', type=Path, required=True)
     parser.add_argument('--paste', type=Path, required=True)
-    parser.add_argument('--legacy-csv', type=Path, required=True)
+    parser.add_argument('--legacy-csv', type=Path)
+    parser.add_argument('--dates-only', action='store_true', help='Only fill empty experience ends; no cleanup report, migration or new Works')
+    parser.add_argument('--expected-token', help='Current dates-only preview token, required with --apply')
     parser.add_argument('--aliases', type=Path, help='Explicitly reviewed paste-title to stable-library-ID JSON')
     parser.add_argument('--reference-date', required=True)
     parser.add_argument('--output', type=Path, required=True, help='Private evidence directory outside the Vault')
@@ -80,13 +83,51 @@ def main():
                         help='New library note path; never overwrites an existing checklist')
     parser.add_argument('--apply', action='store_true')
     args = parser.parse_args()
+    if not args.dates_only and args.legacy_csv is None:
+        parser.error('--legacy-csv is required unless --dates-only is used')
     if args.output.resolve().is_relative_to(args.vault.resolve()):
         raise ValueError('Evidence must live outside the Vault')
     args.output.mkdir(parents=True, exist_ok=True, mode=0o700)
     args.output.chmod(0o700)
     library = Library(args.vault)
-    notes = library.list_notes()
+    if args.dates_only:
+        from markdown_library.bootstrap import _index
+        notes = list(_index(library)[1].values())
+    else:
+        notes = library.list_notes()
     original = {n['id']:n for n in notes}
+    if args.dates_only:
+        aliases = json.loads(args.aliases.read_text()) if args.aliases else {}
+        review_notes = [{**n, 'properties': website_properties(library, n)} for n in notes]
+        plan = review(parse_paste(args.paste.read_text()), review_notes, [], {}, aliases, args.reference_date)
+        dates, preserved, uncertain = {}, [], []
+        for entry in plan['matched']:
+            props = deepcopy(original[entry['id']]['properties'])
+            props['lastPlayedOn'] = entry['lastPlayedOn']
+            outcome = seed_steam_end(props)
+            if outcome['status'] == 'seeded':
+                dates[entry['id']] = entry['lastPlayedOn']
+            elif outcome['status'] == 'preserved-existing':
+                preserved.append(entry['id'])
+            else:
+                uncertain.append({'id': entry['id'], **outcome})
+        # Reuse the atomic catalog transaction, restricted to eligible empty ends.
+        # Filled entries never enter the batch, including their hidden Steam data.
+        batch = compact_works(library, seed_steam=True, steam_dates=dates, note_ids=list(dates))
+        if args.apply:
+            if args.expected_token != batch['expected_token']:
+                raise ValueError('Dates-only preview changed; preview again before applying')
+            batch = compact_works(library, apply=True, expected_token=args.expected_token,
+                                  seed_steam=True, steam_dates=dates, note_ids=list(dates),
+                                  apply_catalog_defaults=False)
+        result = {'applied': args.apply, 'expected_token': batch['expected_token'],
+                  'reference_date': args.reference_date, 'pasted_count': plan['pasted_count'],
+                  'matched_count': len(plan['matched']), 'date_updates': len(dates),
+                  'dates': dates, 'preserved_existing': preserved, 'needs_review': uncertain,
+                  'unmatched': plan['unmatched'], 'publication_selected': False, 'remote_writes': False}
+        (args.output/'dates-only.json').write_text(json.dumps(result, ensure_ascii=False, indent=2)+'\n')
+        print(json.dumps(result, ensure_ascii=False))
+        return
     sync = json.loads((args.vault / '.markdown-library/sync-state.json').read_text())
     state_before = json.loads((args.vault / '.markdown-library/state.json').read_text())
     aliases = json.loads(args.aliases.read_text()) if args.aliases else {}

@@ -12,6 +12,61 @@ from markdown_library.steam_review import parse_paste, resolve_date, review, rep
 
 
 class SteamReviewTests(unittest.TestCase):
+    def test_dates_only_fills_empty_without_touching_manual_dates_or_creating_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lib = Library.initialize(root / 'vault')
+            empty = lib.create('My review', title='Empty', kind='work', properties={
+                'type': 'game', 'rating': 80, 'status': 'in-progress',
+                'experiences': [{'id': 'keep-row', 'startedOn': '2020', 'endedOn': None}]})
+            filled = lib.create('Keep this', title='Filled', kind='work', properties={
+                'type': 'game', 'experiences': [{'endedOn': '2019'}]})
+            source = root / 'paste.txt'
+            source.write_text(''.join(f'{title}\n{title}\n总游戏时间\n2 小时\n最后运行日期\n今天\n我的游戏内容\n'
+                                      for title in ['Empty', 'Filled', 'Not in vault']))
+            command = [__import__('sys').executable, str(Path(__file__).resolve().parents[1] / 'scripts/steam-library-review.py'),
+                       '--vault', str(lib.vault), '--paste', str(source), '--dates-only',
+                       '--reference-date', '2026-11-14', '--output', str(root / 'evidence')]
+            preview = json.loads(subprocess.run(command, check=True, capture_output=True, text=True).stdout)
+            self.assertEqual(preview['date_updates'], 1)
+            self.assertEqual(preview['preserved_existing'], [filled['id']])
+            self.assertEqual(lib.get(empty['id'])['sha256'], empty['sha256'])
+            subprocess.run(command + ['--apply', '--expected-token', preview['expected_token']],
+                           check=True, capture_output=True, text=True)
+            current = lib.get(empty['id'])
+            self.assertEqual(current['properties']['experiences'],
+                             [{'id': 'keep-row', 'startedOn': '2020', 'endedOn': '2026-11-14'}])
+            self.assertEqual(current['properties']['rating'], 80)
+            self.assertEqual(current['properties']['status'], 'in-progress')
+            self.assertEqual(_split(current['markdown'])[1], _split(empty['markdown'])[1])
+            self.assertEqual(lib.get(filled['id'])['markdown'], filled['markdown'])
+            self.assertEqual(len(lib.list_notes()), 2)
+            self.assertEqual(lib.publications(), [])
+            again = json.loads(subprocess.run(command, check=True, capture_output=True, text=True).stdout)
+            self.assertEqual(again['date_updates'], 0)
+
+    def test_dates_only_rejects_stale_preview_and_leaves_multiple_experiences_for_review(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lib = Library.initialize(root / 'vault')
+            one = lib.create('', title='One', kind='work', properties={'type': 'game', 'experiences': []})
+            many = lib.create('', title='Many', kind='work', properties={
+                'type': 'game', 'experiences': [{'startedOn': '2020'}, {'endedOn': '2021'}]})
+            source = root / 'paste.txt'
+            source.write_text(''.join(f'{title}\n{title}\n总游戏时间\n2 小时\n最后运行日期\n今天\n我的游戏内容\n'
+                                      for title in ['One', 'Many']))
+            command = [__import__('sys').executable, str(Path(__file__).resolve().parents[1] / 'scripts/steam-library-review.py'),
+                       '--vault', str(lib.vault), '--paste', str(source), '--dates-only',
+                       '--reference-date', '2026-11-14', '--output', str(root / 'evidence')]
+            preview = json.loads(subprocess.run(command, check=True, capture_output=True, text=True).stdout)
+            self.assertEqual(preview['needs_review'][0]['reason'], 'multiple-experiences')
+            edited = lib.replace(one['id'], _render({**one['properties'], 'rating': 99}, ''), expected_hash=one['sha256'])
+            result = subprocess.run(command + ['--apply', '--expected-token', preview['expected_token']],
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(lib.get(one['id'])['sha256'], edited['sha256'])
+            self.assertEqual(lib.get(many['id'])['sha256'], many['sha256'])
+
     def test_partial_paste_and_absent_vs_explicit_zero(self):
         text = '''所有游戏 (1864)
 A
