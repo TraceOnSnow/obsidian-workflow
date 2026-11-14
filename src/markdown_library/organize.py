@@ -42,7 +42,8 @@ def organize(library, request, *, apply=False, expected_token=None, operation=No
                 or not isinstance(request['source_ids'], list) or not 1 <= len(request['source_ids']) <= 20):
             raise LibraryError('Merge requires 1..20 sources and nonempty Markdown up to 512 KiB')
         result = actions.merge(request['target_id'], request['source_ids'], request['markdown'],
-                               request['expected_hashes'], apply=apply, expected_token=expected_token)
+                               request['expected_hashes'], allow_work_target=True,
+                               apply=apply, expected_token=expected_token)
     else:
         raise LibraryError('Invalid organization request; read --schema for exact fields')
     return after_organization(library, result)

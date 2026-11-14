@@ -22,6 +22,18 @@ DEFAULT_PATH = 'works/作品总表.md'
 TABLE_ID = 'personal-works'
 
 
+def review_filename(title):
+    """Readable Work filenames; identity lives in metadata, never a suffix."""
+    replacements = str.maketrans({
+        '/': '／', '\\': '＼', ':': '：', '*': '＊', '?': '？', '"': '＂',
+        '<': '＜', '>': '＞', '|': '｜', '[': '［', ']': '］', '#': '＃', '%': '％',
+    })
+    name = ''.join(c for c in title if ord(c) >= 32).translate(replacements).strip(' .')
+    if not name:
+        raise LibraryError('Work review requires a readable title or an explicit path')
+    return name + '.md'
+
+
 def _today(config):
     return datetime.now(ZoneInfo(config.get('default_timezone', 'America/Chicago'))).date().isoformat()
 
@@ -504,7 +516,7 @@ def expand_operations(library, state, writes=None, removes=None):
         if has_review_body(markdown):
             review_path = (relative if relative != config['path'] + '#work-' + note_id
                            else config['rows'][note_id].get('review_path')
-                           or config.get('review_root', 'works/感想') + '/' + note_id + '.md')
+                           or config.get('review_root', 'works/感想') + '/' + review_filename(properties['title']))
             destination = library._path(review_path)
             previous_review = old and old['path'] != config['path'] + '#work-' + note_id
             if destination.exists() and (not previous_review or review_path != old['path']):

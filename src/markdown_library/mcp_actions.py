@@ -277,7 +277,10 @@ class LibraryActions:
                 updated[note["id"]] = {**note, "path": destination, "markdown": markdown,
                                        "sha256": _hash(markdown), "properties": properties}
             expected = note["sha256"] if note and note.get("catalog_backed") else file["sha256"]
-            writes.append((destination, markdown, None if destination != path else expected))
+            # Catalog operations guard the logical row even when its review
+            # moves; the catalog expands this into physical storage guards.
+            writes.append((destination, markdown,
+                           expected if destination == path or (note and note.get('catalog_backed')) else None))
         # Guard the source of a move and every rewritten navigation/content file
         # before retaining history or creating a transaction journal.
         affected = {path for path, _, _ in writes} | set(redirects) | set(removed)
@@ -318,8 +321,11 @@ class LibraryActions:
                     # changes. Title, link and publication state are untouched.
                     if 'title' in row or str(PurePosixPath(note['path']).parent) != _POST_FOLDER:
                         raise LibraryError('A Post can only be renamed inside 发表稿; change its title with publish-article')
+                elif kind == 'work':
+                    if 'title' in row or not note['path'].endswith('.md'):
+                        raise LibraryError('Only an existing Work review filename can be renamed; retain its title and catalog identity')
                 elif kind != 'note':
-                    raise LibraryError('Only notes and Post filenames can be moved')
+                    raise LibraryError('Only notes, Work reviews and Post filenames can be moved')
                 if (PurePosixPath(note['path']).stem.casefold() in _RESERVED_NAMES
                         or any(p.casefold() in _CONFIG_FOLDERS for p in PurePosixPath(note['path']).parts)):
                     raise LibraryError('Navigation/configuration files cannot be moved')
@@ -331,7 +337,8 @@ class LibraryActions:
                     replacements[note['path']] = _render(properties, body)
                 destination = (note['path'] if 'title' in row and row['destination'] == note['path']
                                else self._destination(row['destination'],
-                                                      folder=_POST_FOLDER if kind == 'post' else None))
+                                                      folder=(str(PurePosixPath(note['path']).parent)
+                                                              if kind in {'post', 'work'} else None)))
                 if note['id'] in ids or destination in destinations:
                     raise LibraryError('Duplicate move identity or destination')
                 ids.add(note['id']); destinations.add(destination)

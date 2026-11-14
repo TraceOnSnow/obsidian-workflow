@@ -13,6 +13,7 @@ from markdown_library.core import _render, _split
 from markdown_library.lifecycle import _local
 from markdown_library.mcp_actions import LibraryActions
 from markdown_library.overview import publication_overview
+from markdown_library.organize import organize
 from markdown_library.relations import refresh_relations, wikilink
 from markdown_library.transport import sync_once
 from markdown_library.work_catalog import (DEFAULT_PATH, build_catalog, catalog_entry,
@@ -52,6 +53,68 @@ class CatalogIntegrationTests(unittest.TestCase):
     def snapshot(self):
         return {path.relative_to(self.library.vault).as_posix(): path.read_bytes()
                 for path in self.library.vault.rglob('*') if path.is_file()}
+
+    def test_organize_renames_work_review_and_repairs_links_without_changing_fields(self):
+        work = self.library.get(self.reviewed['id'])
+        backlink = self.library.create('[[%s|Review]]' % work['path'][:-3], title='Backlink')
+        destination = str(Path(work['path']).with_name('Readable work.md'))
+        request = {'operation': 'move', 'moves': [{'note_id': work['id'],
+            'destination': destination, 'expected_hash': work['sha256']}]}
+        before = self.snapshot()
+        preview = organize(self.library, request)
+        self.assertEqual(before, self.snapshot())
+        result = organize(self.library, request, apply=True, expected_token=preview['token'])
+        self.assertTrue(result['readback_verified'])
+        current = self.library.get(work['id'])
+        self.assertEqual(current['path'], destination)
+        self.assertEqual(current['properties'], work['properties'])
+        self.assertEqual(current['markdown'], work['markdown'])
+        self.assertFalse(self.library._path(work['path']).exists())
+        self.assertIn(destination[:-3], self.library.get(backlink['id'])['markdown'])
+        row = parse_catalog(self.library._path(DEFAULT_PATH).read_text()).document['records']
+        self.assertIn(destination[:-3], next(r for r in row if r['id'] == work['id'])['values']['review'])
+        self.assertEqual(self.library.publications(), [])
+
+    def test_organize_rejects_work_title_changes_cross_folder_moves_and_empty_reviews(self):
+        work = self.library.get(self.reviewed['id'])
+        virtual = self.library.get(self.virtual['id'])
+        for note, destination, extra in [
+            (work, str(Path(work['path']).with_name('Changed.md')), {'title': 'Changed'}),
+            (work, '00_收件箱/Changed.md', {}),
+            (virtual, 'works/Changed.md', {}),
+        ]:
+            before = self.snapshot()
+            with self.assertRaises(LibraryError):
+                organize(self.library, {'operation': 'move', 'moves': [{'note_id': note['id'],
+                    'destination': destination, 'expected_hash': note['sha256'], **extra}]})
+            self.assertEqual(before, self.snapshot())
+
+    def test_organize_merges_note_into_catalog_work_and_retains_source(self):
+        work = self.library.get(self.virtual['id'])
+        source = self.library.create('Personal experience', title='Source', path='00_收件箱/Source.md')
+        request = {'operation': 'merge', 'target_id': work['id'], 'source_ids': [source['id']],
+            'markdown': work['markdown'] + '\n# Review\n\nPersonal experience\n',
+            'expected_hashes': {work['id']: work['sha256'], source['id']: source['sha256']}}
+        preview = organize(self.library, request)
+        result = organize(self.library, request, apply=True, expected_token=preview['token'])
+        self.assertTrue(result['readback_verified'])
+        self.assertEqual(self.library.get(work['id'])['properties'], work['properties'])
+        self.assertIn('Personal experience', self.library.get(work['id'])['markdown'])
+        self.assertFalse(self.library._path(source['path']).exists())
+        record = self.library._read_state()['notes'][source['id']]
+        self.assertEqual(record['merged_into'], work['id'])
+        self.assertEqual(self.library._path(record['trash']).read_text(), source['markdown'])
+        self.assertEqual(self.library.publications(), [])
+
+    def test_new_catalog_reviews_use_readable_names_and_refuse_collisions(self):
+        work = self.library.create('# Actual review\n\nMy experience.', title='My game: First', kind='work')
+        self.assertEqual(work['path'], 'works/感想/My game： First.md')
+        with self.assertRaises(LibraryError):
+            self.library.create('# Another review\n\nAnother experience.', title='My game: First', kind='work')
+        virtual = self.library.get(self.virtual['id'])
+        self.library.replace(virtual['id'], virtual['markdown'] + '\n# New review\n\nMy experience.\n',
+                             expected_hash=virtual['sha256'])
+        self.assertEqual(self.library.get(virtual['id'])['path'], 'works/感想/Catalog-only work.md')
 
     def enable_completed_default(self):
         state = self.library._read_state()

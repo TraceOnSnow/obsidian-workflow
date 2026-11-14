@@ -62,6 +62,12 @@ renames the local file and repairs links; its title, website link and
 publication state stay unchanged, and `title` is rejected for Posts (change a
 public title with `publish-article`).
 
+A Work with an existing review file can likewise be renamed within its current
+folder. Its catalog identity, title, daily fields and publication state remain
+unchanged; catalog-only Works and `title` changes are rejected. The same merge
+request can use a Work target, preserving all target properties while absorbing
+ordinary note sources and retaining their recoverable history.
+
 A move item may also specify a short `title`. This changes only the frontmatter
 title and preserves the full body, including any authored heading; the receipt
 reports `body_unchanged`. To change just the display title, keep the same

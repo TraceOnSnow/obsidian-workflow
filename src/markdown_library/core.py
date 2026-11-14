@@ -610,8 +610,11 @@ class Library:
             slug = re.sub(r"[^\w\- ]", "", title, flags=re.UNICODE).strip().replace(" ", "-")[:70] or "note"
             folder = {"note": "00_收件箱", "post": "发表稿", "work": "works"}[kind]
             if kind == "work" and state.get("work_catalog"):
+                from .work_catalog import review_filename
                 folder = state["work_catalog"].get("review_root", "works/感想")
-            path = f"{folder}/{slug}-{note_id[:8]}.md"
+                path = folder + '/' + review_filename(title)
+            else:
+                path = f"{folder}/{slug}-{note_id[:8]}.md"
         path = Path(path).as_posix()
         if any(part.startswith(".") for part in Path(path).parts) or not path.lower().endswith(".md"):
             raise LibraryError("New notes require a visible .md path")
