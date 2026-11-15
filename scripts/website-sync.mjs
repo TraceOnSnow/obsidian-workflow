@@ -4,16 +4,21 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, statSync, lstatSync, readdirSync, readFileSync, unlinkSync, writeFileSync, renameSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { vaultFingerprint, remoteFingerprint, readGate, writeGate, clearGate, canSkip } from './website-sync-gate.mjs';
 
 const project = fileURLToPath(new URL('../', import.meta.url));
 const vault = '/home/trace/projects/personal-records-vault';
 const origin = 'https://traceonsnow.com';
 const credentials = '/home/trace/.config/homepage-content/client.env';
 const output = path.join(project, 'runtime/website-sync');
-const flags = process.argv.slice(2);
-if (flags.some(flag => !['--apply', '--accept-remote'].includes(flag)) || new Set(flags).size !== flags.length
-    || (flags.includes('--accept-remote') && !flags.includes('--apply'))) {
-  console.error('Use no arguments to preview, or --apply [--accept-remote].');
+const gateFile = path.join(output, 'gate.json');
+const given = process.argv.slice(2);
+// --force bypasses the unchanged-state gate; it is not passed to the CLI.
+const force = given.includes('--force');
+const flags = given.filter(flag => flag !== '--force');
+if (given.some(flag => !['--apply', '--accept-remote', '--force'].includes(flag)) || new Set(given).size !== given.length
+    || (flags.includes('--accept-remote') && !flags.includes('--apply')) || (force && !flags.includes('--apply'))) {
+  console.error('Use no arguments to preview, or --apply [--accept-remote] [--force].');
   process.exit(2);
 }
 process.umask(0o077);
@@ -28,6 +33,22 @@ try {
   if (!info.isFile() || info.uid !== process.getuid() || (info.mode & 0o077)) throw Error('private-credentials-required');
   process.loadEnvFile(credentials);
   if (process.env.HOMEPAGE_URL !== origin || !process.env.HOMEPAGE_API_KEY) throw Error('configured-origin-or-key-invalid');
+  // The periodic apply run skips the full scan when neither side changed
+  // since the last complete run. The fingerprint is taken before the run, so
+  // an edit made while a run is in progress is picked up by the next tick.
+  // Previews always run in full.
+  let fingerprint = null;
+  if (flags.includes('--apply')) {
+    try {
+      fingerprint = `${vaultFingerprint(vault)}:${await remoteFingerprint(origin, process.env.HOMEPAGE_API_KEY)}`;
+    } catch { fingerprint = null; }
+    const gate = readGate(gateFile);
+    if (!force && fingerprint && canSkip(gate, fingerprint)) {
+      console.log(JSON.stringify({ origin, mode: 'apply', skipped: 'unchanged-since-last-full-run',
+        last_full_run: gate.full_run_at, needs_review: gate.needs_review }));
+      process.exit(gate.exit_code);
+    }
+  }
   const started = new Date().toISOString();
   const result = spawnSync(path.join(project, '.venv/bin/markdown-library'), [
     '--vault', vault, 'sync', '--url', origin, '--api-key-env', 'HOMEPAGE_API_KEY',
@@ -111,7 +132,14 @@ try {
   // a failed website synchronization. Keep actual conflicts/pending/errors
   // distinguishable from this informational inventory condition.
   if (syncNeedsReview || !inventoryVerified || inventory?.counts?.conflicts || relations?.issues?.length) process.exitCode = 1;
+  if (flags.includes('--apply')) {
+    if (fingerprint) {
+      writeGate(gateFile, { fingerprint, full_run_at: started, exit_code: process.exitCode ? 1 : 0, needs_review: needsReview });
+    } else clearGate(gateFile);
+  }
 } catch {
+  // An unverified run must be repeated in full, never skipped.
+  clearGate(gateFile);
   // No environment values, remote bodies, child stderr or exception URLs.
   try {
     mkdirSync(output, { recursive: true, mode: 0o700 });
