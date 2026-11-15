@@ -452,14 +452,20 @@ class Library:
             return [copy.deepcopy(note) for note in sorted(notes.values(), key=lambda n: n["path"])
                     if query.casefold() in note["markdown"].casefold()]
 
-    def _registration_identity_paths(self, note_id):
+    def _registration_identity_paths(self, note_id, *, allow_missing_catalog=False):
         """Read-only duplicate check; unlike _scan this never retains objects."""
         from .work_catalog import enabled
-        if enabled(self._read_state()):
-            from .bootstrap import _index
-            note = _index(self)[1].get(note_id)
-            return [note["path"]] if note else []
         found = []
+        state = self._read_state()
+        if enabled(state):
+            if not allow_missing_catalog:
+                from .bootstrap import _index
+                note = _index(self)[1].get(note_id)
+                return [note['path']] if note else []
+            from .work_catalog import _read_catalog
+            catalog, _ = _read_catalog(self, state)
+            if any(row['id'] == note_id for row in catalog.document['records']):
+                found.append(state['work_catalog']['path'] + '#work-' + note_id)
         for directory, names, filenames in os.walk(self.vault, followlinks=False):
             for name in list(names):
                 candidate = Path(directory) / name
@@ -872,7 +878,7 @@ class Library:
                 raise LibraryError("Identity was permanently deleted")
             if not record or record.get("unregistered"):
                 raise LibraryError("Unknown managed id")
-            if self._registration_identity_paths(note_id):
+            if self._registration_identity_paths(note_id, allow_missing_catalog=True):
                 raise LibraryError("Identity still exists in the Vault; native rename is not a deletion")
             digest = record.get("sha256")
             self._expect({"sha256": digest}, expected_hash)
@@ -910,7 +916,11 @@ class Library:
                                          "sha256": expected_hash, "requested_at": moment}})
             if note_id in state["publications"]:
                 state["publications"][note_id].update({"state": "deleted", "deleted_at": moment})
-            self._commit(state, [(trash, markdown, trash_hash)], [(record["path"], None)])
+            # Absence was checked above. No logical catalog operation remains:
+            # retain the object and tombstone without expanding unrelated rows.
+            # Other native removals may still await their own explicit consent.
+            self._commit(state, [(trash, markdown, trash_hash)], [(record["path"], None)],
+                         storage_resolved=True)
             return {"id": note_id, "path": record["path"], "sha256": expected_hash, "deleted": True, "applied": True}
 
     def recover(self, note_id, *, path=None, expected_hash, origin="local"):

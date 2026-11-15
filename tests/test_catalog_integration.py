@@ -54,6 +54,55 @@ class CatalogIntegrationTests(unittest.TestCase):
         return {path.relative_to(self.library.vault).as_posix(): path.read_bytes()
                 for path in self.library.vault.rglob('*') if path.is_file()}
 
+    def test_confirm_native_catalog_removals_individually_preserves_other_edits(self):
+        notes = [self.library.get(item['id']) for item in (self.virtual, self.reviewed)]
+        catalog_path = self.library._path(DEFAULT_PATH)
+        catalog = parse_catalog(catalog_path.read_text())
+        catalog_path.write_text(build_catalog([], catalog))
+        self.library._path(self.reviewed['path']).unlink()
+        before = self.snapshot()
+        first = notes[0]
+        self.library.confirm_missing_delete(first['id'], expected_hash=first['sha256'])
+        self.assertEqual(before, self.snapshot())
+        self.library.confirm_missing_delete(first['id'], expected_hash=first['sha256'], apply=True)
+        self.assertNotIn(notes[1]['id'], self.library.deletion_records())
+        with self.assertRaisesRegex(LibraryError, 'Known Work catalog row is missing'):
+            self.library.list_notes()
+        second = notes[1]
+        self.library.confirm_missing_delete(second['id'], expected_hash=second['sha256'], apply=True)
+        self.assertEqual(catalog_path.read_bytes(), before[DEFAULT_PATH])
+        self.assertEqual(self.library.list_notes(), [])
+        for note in notes:
+            retained = self.library._path('.markdown-library/trash/' + note['id'] + '.md')
+            self.assertEqual(retained.read_text(), note['markdown'])
+
+    def test_confirm_native_catalog_removal_refuses_existing_row(self):
+        note = self.library.get(self.virtual['id'])
+        with self.assertRaisesRegex(LibraryError, 'Identity still exists'):
+            self.library.confirm_missing_delete(note['id'], expected_hash=note['sha256'], apply=True)
+
+    def test_steam_batch_preserves_unrelated_native_blank_dates_after_readback(self):
+        from markdown_library.work_profile import compact_works
+        self.enable_completed_default()
+        state = self.library._read_state()
+        state['work_catalog']['default_end_today'] = True
+        self.library._save(state)
+        destination = self.library._path(DEFAULT_PATH)
+        catalog = parse_catalog(destination.read_text())
+        row = deepcopy(catalog.document['records'][0])
+        row['id'] = 'unrelated-native-row'
+        row['values'].update(title='Untouched game', status='', review=None, endedOn='')
+        catalog.document['records'].append(row)
+        destination.write_text(build_catalog(catalog.document['records'], catalog))
+        before = deepcopy(row)
+        request = dict(seed_steam=True, steam_dates={self.virtual['id']: '2026-11-14'},
+                       note_ids=[self.virtual['id']])
+        preview = compact_works(self.library, **request)
+        compact_works(self.library, apply=True, expected_token=preview['expected_token'],
+                      apply_catalog_defaults=False, **request)
+        self.library.get(self.virtual['id'])
+        self.assertEqual(self.table_record(row['id']), before)
+
     def test_organize_renames_work_review_and_repairs_links_without_changing_fields(self):
         work = self.library.get(self.reviewed['id'])
         backlink = self.library.create('[[%s|Review]]' % work['path'][:-3], title='Backlink')
