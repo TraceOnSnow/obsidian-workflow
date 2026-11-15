@@ -28,6 +28,12 @@ def parser():
     search.add_argument('--folder')
     search.add_argument('--limit', type=int, default=20)
     search.add_argument('--offset', type=int, default=0)
+    check = commands.add_parser('check', help='Read-only editorial checks from the Vault rules file; exits 2 when anything is found')
+    check.add_argument('ids', nargs='*')
+    check.add_argument('--kind', choices=['note', 'work', 'post'])
+    check.add_argument('--folder')
+    check.add_argument('--rules', type=Path, help='Rules JSON; default <vault>/config/editorial-checks.json')
+    check.add_argument('--limit', type=int, default=200)
     commands.add_parser('sources', help='Read provenance for one current note, including merged source redirects').add_argument('id')
     messages = commands.add_parser('source-messages', help='Read bounded recorded messages from an explicitly selected local workbench')
     messages.add_argument('id')
@@ -208,6 +214,10 @@ def dispatch(arguments):
         from .note_queries import search_notes
         return search_notes(library, arguments.query, kind=arguments.kind, folder=arguments.folder,
                             limit=arguments.limit, offset=arguments.offset)
+    if action == 'check':
+        from .checks import check_notes
+        return check_notes(library, ids=arguments.ids, kind=arguments.kind, folder=arguments.folder,
+                           rules_path=arguments.rules, limit=arguments.limit)
     if action == 'sources':
         from .note_queries import note_sources
         return note_sources(library, arguments.id)
@@ -327,6 +337,8 @@ def main(argv=None):
         output = dispatch(arguments)
         print(json.dumps(output, ensure_ascii=False, allow_nan=False))
         if arguments.command == 'publish-article' and output.get('status') == 'needs_review':
+            return 2
+        if arguments.command == 'check' and not output['clean']:
             return 2
         if arguments.command in {'organize', 'move', 'merge', 'navigation'} and (
                 output.get('status') == 'needs_review' or output.get('state') == 'needs_review'):

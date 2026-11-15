@@ -15,6 +15,29 @@ substring, so Chinese needs no segmentation). Results are ordered by relevance,
 with title matches first, and each carries a short one-line `snippet` around the
 match. An empty query lists by path without snippets.
 
+## Check notes against the owner's mechanical rules
+
+`check` reads a rules file kept with the Vault (default
+`config/editorial-checks.json`, or `--rules FILE`) and reports violations
+without editing anything. It exits 2 when something is found, so it can gate
+filing or publishing. Limit it with note IDs, `--folder` or `--kind`.
+
+```sh
+markdown-library --vault /absolute/vault check
+markdown-library --vault /absolute/vault check NOTE_ID --kind post
+```
+
+The rules are private policy and are not part of this repository. Each rule has
+an `id`, a `type` and a regular-expression `pattern`, plus optional `message`,
+`kinds`, `folders`, `exclude_folders`, `path_pattern` and `ignore_line_pattern`:
+
+| Type | Meaning |
+| --- | --- |
+| `forbid` | The pattern must not match any body line outside fenced code |
+| `forbid-in-code-span` | The pattern must not match the text of an inline code span |
+| `require` | The pattern must match at least one body line outside fenced code |
+| `filename` | The file name without `.md` must match the pattern |
+
 ```sh
 markdown-library --vault /absolute/vault search --query game --limit 10
 markdown-library --vault /absolute/vault get NOTE_ID
