@@ -100,7 +100,8 @@ def build_server(vault: str | Path, *, read_only=False, fastmcp_options=None):
     @tool(annotations=read, title='搜索笔记和作品')
     def search_notes(query: str = '', kind: str | None = None,
                      folder: str | None = None, limit: int = 20, offset: int = 0) -> dict[str, Any]:
-        """Find managed notes by text, kind or folder. Returns IDs and hashes, not full private bodies."""
+        """Find managed notes by text, kind or folder. Space-separated terms must all match;
+        best matches come first. Returns IDs, hashes and a short snippet, not full private bodies."""
         from .note_queries import search_notes as search
         return search(library, query, kind=kind, folder=folder, limit=limit, offset=offset)
 

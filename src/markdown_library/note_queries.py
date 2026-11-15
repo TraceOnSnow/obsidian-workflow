@@ -1,12 +1,13 @@
 """Bounded note and provenance reads; no checkpoint or hidden-state access by callers."""
 import json
+import math
 from pathlib import Path, PurePosixPath
 import re
 from datetime import datetime, timezone
 from hashlib import sha256
 
 from .bootstrap import _index
-from .core import LibraryError, _hash
+from .core import LibraryError, _hash, _split
 
 
 def summary(note):
@@ -24,11 +25,53 @@ def search_notes(library, query='', *, kind=None, folder=None, limit=20, offset=
     prefix = folder.rstrip('/') + '/' if folder else None
     with library._lock():
         notes = sorted(_index(library)[1].values(), key=lambda n: n['path'])
-        hits = [n for n in notes if query.casefold() in n['markdown'].casefold()
+        terms = list(dict.fromkeys(query.casefold().split()))
+        texts = {n['id']: n['markdown'].casefold() for n in notes} if terms else {}
+        hits = [n for n in notes if all(term in texts[n['id']] for term in terms)
                 and (kind is None or n['properties']['kind'] == kind)
                 and (prefix is None or n['path'].startswith(prefix))]
-    return {'total': len(hits), 'offset': offset, 'items': [summary(n) for n in hits[offset:offset + limit]],
+        if terms:
+            # Every managed note is already in memory for this read, so rank in
+            # place instead of keeping a derived index that could go stale.
+            scores = _relevance(notes, texts, terms)
+            hits.sort(key=lambda n: (-scores[n['id']], n['path']))
+    return {'total': len(hits), 'offset': offset,
+            'items': [summary(n) | ({'snippet': _snippet(n['markdown'], terms)} if terms else {})
+                      for n in hits[offset:offset + limit]],
             'next_offset': offset + limit if offset + limit < len(hits) else None}
+
+
+def _relevance(notes, texts, terms, *, k=1.2, b=0.75, title_weight=3.0):
+    """BM25 over substring counts, so Chinese needs no word segmentation."""
+    average = sum(len(text) for text in texts.values()) / max(len(texts), 1) or 1
+    scores = dict.fromkeys(texts, 0.0)
+    for term in terms:
+        containing = sum(term in text for text in texts.values())
+        rarity = math.log(1 + (len(texts) - containing + 0.5) / (containing + 0.5))
+        for note in notes:
+            text = texts[note['id']]
+            count = text.count(term)
+            if not count:
+                continue
+            frequency = count * (k + 1) / (count + k * (1 - b + b * len(text) / average))
+            title = title_weight if term in str(note['properties']['title']).casefold() else 0.0
+            scores[note['id']] += rarity * (frequency + title)
+    return scores
+
+
+def _snippet(markdown, terms, *, radius=60):
+    """A short single-line excerpt around the earliest term in the body."""
+    try:
+        body = _split(markdown)[1]
+    except Exception:
+        body = markdown
+    folded = body.casefold()
+    found = [(folded.find(term), len(term)) for term in terms if term in folded]
+    if not found or len(folded) != len(body):
+        return ' '.join(body.split())[:2 * radius]
+    start, length = min(found)
+    left, right = max(0, start - radius), min(len(body), start + length + radius)
+    return ('…' if left else '') + ' '.join(body[left:right].split()) + ('…' if right < len(body) else '')
 
 
 def note_sources(library, note_id):

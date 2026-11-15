@@ -10,6 +10,10 @@ helpers or construct a temporary orchestration script.
 
 `search` returns bounded identities, paths and hashes, rather than every matching
 body. Read a selected note with `get ID` before preparing semantic changes.
+A query is split on whitespace and every term must appear (case-insensitive
+substring, so Chinese needs no segmentation). Results are ordered by relevance,
+with title matches first, and each carries a short one-line `snippet` around the
+match. An empty query lists by path without snippets.
 
 ```sh
 markdown-library --vault /absolute/vault search --query game --limit 10
