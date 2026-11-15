@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: obsidian-workflow
+          persist-credentials: false
+
+      # scripts/inbox-semantic-organize.py imports the sibling project from
+      # ../chatgpt-pipeline/src, the same layout as on the server.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: TraceOnSnow/chatgpt-pipeline
+          path: chatgpt-pipeline
+          persist-credentials: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.21.0'
+
+      - name: Install Python dependencies
+        working-directory: obsidian-workflow
+        run: |
+          python3 --version
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet -r requirements-mcp.lock
+
+      - name: Python tests
+        working-directory: obsidian-workflow
+        env:
+          PYTHONPATH: src
+        run: .venv/bin/python -m unittest discover -s tests -q
+
+      - name: Node tests
+        working-directory: obsidian-workflow
+        run: node --test tests/*.test.mjs
