@@ -33,7 +33,7 @@ class LibraryError(Exception):
 
 KINDS = {"note", "work", "post"}
 PUBLIC_WORK_FIELDS = {
-    "slug", "type", "rating", "status", "tags", "note", "article", "experiences",
+    "slug", "type", "rating", "status", "cloud", "tags", "note", "article", "experiences",
     "aliases", "cover", "coverUrl", "releaseDate", "creators", "platforms", "description", "sources",
 }
 PUBLIC_POST_FIELDS = {"link", "locale", "publishedAt", "description", "tags", "cover", "categories", "frontmatter"}

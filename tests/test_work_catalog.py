@@ -422,3 +422,61 @@ class WorkCatalogTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class WorkCatalogCloudTests(unittest.TestCase):
+    """云 checkbox column (2026-11-21): optional, checked means `cloud: true`."""
+
+    setUp, note, seed, catalog = WorkCatalogTests.setUp, WorkCatalogTests.note, WorkCatalogTests.seed, WorkCatalogTests.catalog
+    native_edit, scan, replay, replace = (WorkCatalogTests.native_edit, WorkCatalogTests.scan,
+                                         WorkCatalogTests.replay, WorkCatalogTests.replace)
+
+    def add_cloud_column(self, checked=()):
+        def edit(document):
+            document['fields'].insert(4, {'id': 'cloud', 'name': '云', 'type': 'checkbox'})
+            for row in document['records']:
+                if row['id'] in checked:
+                    row['values']['cloud'] = True
+        self.native_edit(edit)
+
+    def test_without_column_a_retained_flag_survives_scan_and_edits(self):
+        self.seed(self.note(cloud=True))
+        current = self.scan()['work-a']
+        self.assertIs(current['properties']['cloud'], True)
+        self.replace(current, rating=70)
+        after = self.scan()['work-a']
+        self.assertIs(after['properties']['cloud'], True)
+        self.assertNotIn('cloud', self.catalog().document['records'][0]['values'])
+
+    def test_column_checkbox_projects_true_or_absent_and_writes_back(self):
+        self.seed(self.note(), self.note('work-b'))
+        before = {key: note['sha256'] for key, note in self.scan().items()}
+        self.add_cloud_column()
+        unchanged = self.scan()
+        # Adding the column alone changes no logical Work.
+        self.assertEqual({key: note['sha256'] for key, note in unchanged.items()}, before)
+        self.native_edit(lambda document: document['records'][0]['values'].update(cloud=True))
+        checked = self.scan()
+        self.assertIs(checked['work-a']['properties']['cloud'], True)
+        self.assertNotIn('cloud', checked['work-b']['properties'])
+        self.native_edit(lambda document: document['records'][0]['values'].update(cloud=False))
+        self.assertNotIn('cloud', self.scan()['work-a']['properties'])
+        # A library write (e.g. a website change imported as a draft) checks the box.
+        self.replace(self.scan()['work-b'], cloud=True)
+        values = {row['id']: row['values'] for row in self.catalog().document['records']}
+        self.assertIs(values['work-b']['cloud'], True)
+        self.assertIs(values['work-a']['cloud'], False)
+
+    def test_cloud_column_and_cells_must_be_checkboxes(self):
+        self.seed(self.note())
+        path = self.library._path(self.state['work_catalog']['path'])
+        source = _read(path)
+        document = json.loads(source.split('```super-table\n', 1)[1].rsplit('\n```', 1)[0])
+        for field_type, cell in (('text', None), ('checkbox', 'yes')):
+            bad = deepcopy(document)
+            bad['fields'].append({'id': 'cloud', 'name': '云', 'type': field_type})
+            bad['records'][0]['values']['cloud'] = cell
+            self.library._atomic(self.state['work_catalog']['path'],
+                                 '# 作品总表\n\n```super-table\n' + json.dumps(bad, ensure_ascii=False) + '\n```\n')
+            with self.assertRaises(LibraryError):
+                self.scan()

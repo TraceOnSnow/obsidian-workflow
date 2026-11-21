@@ -11,7 +11,7 @@ from .core import LibraryError, _now
 from .sync import content_hash, export_publication, _remote_hash
 from .transport import _Store, _resolve_relationships, sync_once
 
-DAILY_FIELDS = frozenset({'rating', 'note', 'status', 'experiences'})
+DAILY_FIELDS = frozenset({'rating', 'note', 'status', 'cloud', 'experiences'})
 
 
 def daily_origin(note_or_properties):

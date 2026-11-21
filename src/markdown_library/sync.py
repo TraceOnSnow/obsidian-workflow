@@ -18,7 +18,7 @@ from .publication_navigation import strip_publication_navigation
 
 
 WORK_FIELDS = frozenset({
-    "title", "slug", "type", "rating", "status", "tags", "note", "article",
+    "title", "slug", "type", "rating", "status", "cloud", "tags", "note", "article",
     "experiences", "aliases", "cover", "coverUrl", "releaseDate", "creators",
     "platforms", "description", "sources", "visibility", "_status",
 })
@@ -63,6 +63,12 @@ def content_hash(value: Any) -> str:
 def _project(values: Mapping[str, Any], collection: str) -> dict[str, Any]:
     allowed = WORK_FIELDS if collection == "works" else POST_FIELDS
     result = {key: deepcopy(value) for key, value in values.items() if key in allowed}
+    # 云 is a flag: false, null and absent all mean "not 云". Dropping the falsy
+    # forms keeps hashes and baselines from before the field existed unchanged.
+    if collection == "works" and "cloud" in result and result["cloud"] is not True:
+        if result["cloud"] not in {False, None}:
+            raise ValueError("cloud must be true, false or empty")
+        del result["cloud"]
     if collection == "works" and "rating" in result:
         from .ratings import validate_rating
         validate_rating(result["rating"])
@@ -284,6 +290,9 @@ def plan_sync(
             state = publication["state"]
             prior_fields = baseline.get("local_fields")
             removed_fields = sorted(set(prior_fields) - set(export["fields"])) if isinstance(prior_fields, Mapping) else []
+            # Unchecking 云 is an explicit "false", not a property removal.
+            reset_cloud = collection == "works" and "cloud" in removed_fields
+            removed_fields = [name for name in removed_fields if not (reset_cloud and name == "cloud")]
             if state == "published" and local_changed and prior_fields is None:
                 unknown_omissions = sorted(set(_project(remote, collection)) - set(export["fields"]) - {"_status", "visibility"})
                 if unknown_omissions:
@@ -320,6 +329,8 @@ def plan_sync(
                 # Only send changed selected fields. Absent keys are not resets.
                 fields = {key: deepcopy(value) for key, value in export["fields"].items()
                           if not _contains(_project(remote, collection).get(key), value) or key not in remote}
+                if reset_cloud and _project(remote, collection).get("cloud") is True:
+                    fields["cloud"] = False
                 if not fields and prior_fields is None:
                     actions.append(_action(export, "conflict", "baseline-values-required-for-empty-update", remote))
                     continue

@@ -287,3 +287,41 @@ class SyncPlannerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CloudFlagSyncTests(unittest.TestCase):
+    """云 (2026-11-21): false, null and absent are the same "not 云" value."""
+
+    def test_migrated_remote_false_is_not_a_website_change(self):
+        publication = work(rating=80)
+        baseline, records = fixtures(publication)  # baseline observed before the field existed
+        records["works"]["docs"][0]["cloud"] = False
+        self.assertEqual(action(publication, baseline, records)["action"], "unchanged")
+        records["works"]["docs"][0]["cloud"] = None
+        self.assertEqual(action(publication, baseline, records)["action"], "unchanged")
+
+    def test_checking_sends_true_and_unchecking_sends_explicit_false(self):
+        publication = work(rating=80)
+        baseline, records = fixtures(publication)
+        records["works"]["docs"][0]["cloud"] = False
+        publication["snapshot"]["properties"]["cloud"] = True
+        planned = action(publication, baseline, records)
+        self.assertEqual((planned["action"], planned["payload"]), ("update", {"cloud": True}))
+        checked = deepcopy(publication)
+        baseline, records = fixtures(checked)
+        unchecked = deepcopy(checked)
+        del unchecked["snapshot"]["properties"]["cloud"]
+        planned = action(unchecked, baseline, records)
+        self.assertEqual((planned["action"], planned["payload"]), ("update", {"cloud": False}))
+
+    def test_admin_checking_becomes_library_draft_with_the_flag(self):
+        publication = work(rating=80)
+        baseline, records = fixtures(publication)
+        records["works"]["docs"][0].update(cloud=True, updatedAt="2026-10-21T02:00:00Z")
+        planned = action(publication, baseline, records)
+        self.assertEqual(planned["action"], "reverse-change")
+        self.assertIs(planned["library_draft"]["properties"]["cloud"], True)
+
+    def test_invalid_cloud_value_fails_closed(self):
+        with self.assertRaises(ValueError):
+            export_publication(work(cloud="yes"))

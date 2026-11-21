@@ -45,7 +45,10 @@ def creation_defaults(properties, config):
         properties['experiences'] = [{'endedOn': _today(config)}]
 
 
-DAILY_FIELDS = frozenset({'title', 'type', 'rating', 'status', 'note', 'experiences'})
+DAILY_FIELDS = frozenset({'title', 'type', 'rating', 'status', 'cloud', 'note', 'experiences'})
+# Optional checkbox column (2026-11-21): 云, experienced secondhand. Checked means
+# `cloud: true`; unchecked or a missing column means the property is absent.
+CLOUD_FIELD = 'cloud'
 SCALAR_FIELDS = ('title', 'type', 'rating', 'status', 'note')
 FIELD_TYPES = {'title': 'text', 'type': 'text', 'rating': 'number', 'status': 'text',
                'note': 'text', 'startedOn': 'text', 'endedOn': 'text', 'review': 'text'}
@@ -115,6 +118,8 @@ def _validate_row(row):
     # The native number editor stores a cleared cell as "".  Keep that source
     # representation intact while projecting it as the ordinary unknown rating.
     validate_rating(None if values['rating'] == '' else values['rating'])
+    if values.get(CLOUD_FIELD) not in {None, '', True, False}:
+        raise LibraryError('Work catalog 云 must be a checkbox value')
     for name in ('startedOn', 'endedOn'):
         _valid_date(values[name])
     _review_path(values['review'])
@@ -135,6 +140,8 @@ def _validate_document(document):
         fields[field['id']] = field
     if not FIELD_TYPES.keys() <= fields.keys():
         raise LibraryError('Work catalog required columns were removed')
+    if CLOUD_FIELD in fields and fields[CLOUD_FIELD].get('type') != 'checkbox':
+        raise LibraryError('Work catalog 云 column must be a checkbox')
     for name, kind in FIELD_TYPES.items():
         # Native single-select controls store their label as a string too.
         allowed = {kind} | ({'select', 'status'} if name in {'type', 'status'} else set())
@@ -234,7 +241,11 @@ def has_review_body(markdown_or_body):
     return bool(re.sub(r'^\s*#{1,6}\s+[^\n]*(?:\n|$)', '', body, flags=re.MULTILINE).strip())
 
 
-def row_from_note(note, review_path=None):
+def has_cloud_column(catalog):
+    return any(field.get('id') == CLOUD_FIELD for field in catalog.document['fields'])
+
+
+def row_from_note(note, review_path=None, *, cloud_column=False):
     properties = note['properties']
     experiences = deepcopy(properties.get('experiences') or [])
     if not isinstance(experiences, list) or any(not isinstance(item, dict) for item in experiences):
@@ -248,6 +259,8 @@ def row_from_note(note, review_path=None):
     navigation = re.search(r'<!-- markdown-library:publication-nav:start -->(.*?)<!-- markdown-library:publication-nav:end -->', note['markdown'], re.S)
     article = re.search(r'\[\[[^\]\n]+\]\]', navigation[1]) if navigation else None
     row['values']['article'] = article[0] if article else None
+    if cloud_column:
+        row['values'][CLOUD_FIELD] = properties.get(CLOUD_FIELD) is True
     _validate_row(row)
     return row
 
@@ -299,7 +312,7 @@ def _physical_review(library, path, note_id):
             'sha256': _hash(markdown)}
 
 
-def _logical(library, state, row, physical=None):
+def _logical(library, state, row, physical=None, *, cloud_column=False):
     config = state['work_catalog']
     note_id, values = row['id'], row['values']
     retained = config['rows'].get(note_id, {})
@@ -312,6 +325,12 @@ def _logical(library, state, row, physical=None):
         value = None if key == 'rating' and values[key] == '' else values[key]
         if key in original or value is not None:
             properties[key] = deepcopy(value)
+    # Without the column, a retained flag (e.g. set in Payload) stays as is.
+    if cloud_column:
+        if values.get(CLOUD_FIELD) is True:
+            properties[CLOUD_FIELD] = True
+        else:
+            properties.pop(CLOUD_FIELD, None)
     raw_experiences = deepcopy(original.get('experiences'))
     experiences = raw_experiences
     if experiences is not None and (not isinstance(experiences, list)
@@ -394,7 +413,7 @@ def scan_overlay(library, state, found, *, apply_defaults=False):
             if config.get('default_end_today') and row['values']['endedOn'] in {None, ''}:
                 row['values']['endedOn'] = _today(config)
                 defaulted = True
-        note = _logical(library, state, row, found.get(note_id))
+        note = _logical(library, state, row, found.get(note_id), cloud_column=has_cloud_column(catalog))
         note['catalog_sha256'] = catalog_hash
         if note['storage_path'] == config['path']:
             note['storage_sha256'] = catalog_hash
@@ -419,7 +438,7 @@ def storage_hash(library, state, note):
         return _hash(_read(destination)) if destination.exists() else None
     catalog, _ = _read_catalog(library, state)
     row = next((row for row in catalog.document['records'] if row['id'] == note['id']), None)
-    return _logical(library, state, row)['sha256'] if row else None
+    return _logical(library, state, row, cloud_column=has_cloud_column(catalog))['sha256'] if row else None
 
 
 def assert_storage(library, note):
@@ -478,7 +497,7 @@ def expand_operations(library, state, writes=None, removes=None):
         if note_id in touched:
             raise LibraryError('Multiple writes to one Work in a transaction')
         touched.add(note_id)
-        old = _logical(library, state, rows[note_id]) if note_id in rows else None
+        old = _logical(library, state, rows[note_id], cloud_column=has_cloud_column(catalog)) if note_id in rows else None
         if (old['sha256'] if old else None) != expected:
             raise LibraryError('Revision conflict: Work catalog row changed: ' + note_id)
         current[note_id] = old
@@ -501,7 +520,7 @@ def expand_operations(library, state, writes=None, removes=None):
             if expected is not None:
                 raise LibraryError('Work catalog row is already missing')
             continue
-        old = _logical(library, state, rows[note_id])
+        old = _logical(library, state, rows[note_id], cloud_column=has_cloud_column(catalog))
         if old['sha256'] != expected:
             raise LibraryError('Revision conflict: Work catalog row changed before deletion')
         if old['path'] != config['path'] + '#work-' + note_id:
@@ -529,7 +548,7 @@ def expand_operations(library, state, writes=None, removes=None):
             removal = (old['path'], old['storage_sha256'])
             if removal not in physical_removes:
                 physical_removes.append(removal)
-        replacement = row_from_note(note, review_path)
+        replacement = row_from_note(note, review_path, cloud_column=has_cloud_column(catalog))
         row = rows.get(note_id, {'id': note_id, 'values': {}})
         row['values'].update(replacement['values'])
         rows[note_id] = row
