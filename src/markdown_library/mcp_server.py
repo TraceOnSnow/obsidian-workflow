@@ -6,10 +6,12 @@ content operations, never a shell, credential reader, or publication endpoint.
 from __future__ import annotations
 
 import argparse
+from functools import partial, wraps
 from pathlib import Path
 import re
 from typing import Any
 
+from anyio import to_thread
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
@@ -80,16 +82,21 @@ def build_server(vault: str | Path, *, read_only=False, fastmcp_options=None, pr
 
     def tool(*, annotations, title):
         def register(fn):
-            from functools import wraps
-
-            @wraps(fn)
-            def guarded(*args, **kwargs):
+            def call(*args, **kwargs):
                 try:
                     return fn(*args, **kwargs)
                 except LibraryError as exc:
                     raise ToolError(str(exc)) from None
                 except (OSError, UnicodeError, ValueError, KeyError):
                     raise ToolError('Library operation failed. Preserve current data; inspect server locally.') from None
+
+            # FastMCP calls sync tools on the event-loop thread, so one slow
+            # scan would stall every request. Run the body in a worker thread;
+            # wraps() keeps the name, docstring and signature for the schema.
+            # Library operations still serialize on the Vault flock.
+            @wraps(fn)
+            async def guarded(*args, **kwargs):
+                return await to_thread.run_sync(partial(call, *args, **kwargs))
             return server.tool(annotations=annotations, title=title, structured_output=True)(guarded)
         return register
 
