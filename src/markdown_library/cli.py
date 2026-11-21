@@ -34,6 +34,12 @@ def parser():
     check.add_argument('--folder')
     check.add_argument('--rules', type=Path, help='Rules JSON; default <vault>/config/editorial-checks.json')
     check.add_argument('--limit', type=int, default=200)
+    report = commands.add_parser('time-report', help='Summarize recorded device time per day; --apply fills the daily note heading')
+    report.add_argument('dates', nargs='*', help='YYYY-MM-DD; default: the latest recorded days')
+    report.add_argument('--days', type=int, default=7)
+    report.add_argument('--apply', action='store_true')
+    report.add_argument('--create-missing', action='store_true', help='Create a daily note from the template when none exists')
+    report.add_argument('--include-running', action='store_true', help='Also write days that have not ended on the recording device')
     commands.add_parser('sources', help='Read provenance for one current note, including merged source redirects').add_argument('id')
     messages = commands.add_parser('source-messages', help='Read bounded recorded messages from an explicitly selected local workbench')
     messages.add_argument('id')
@@ -84,6 +90,15 @@ def parser():
     replace.add_argument("id")
     replace.add_argument("file", help="Complete replacement Markdown, preserving frontmatter id")
     replace.add_argument("--expected-hash", required=True)
+    edit = commands.add_parser("edit", help="Exact old/new text edits on one note, optional rename; preview unless --apply")
+    edit.add_argument("id", nargs="?")
+    edit.add_argument("--request", help="JSON {edits:[{old,new,count}], expected_hash?, rename?:{destination}}, or - for stdin")
+    edit.add_argument("--schema", action="store_true")
+    edit.add_argument("--apply", action="store_true")
+    tracker = commands.add_parser("tracker-summary", help="Check a job tracker's event lines and regenerate its marked stage summary")
+    tracker.add_argument("id")
+    tracker.add_argument("--as-of", help="Label for the summary heading; default today's Beijing date as MM-DD")
+    tracker.add_argument("--apply", action="store_true")
     history = commands.add_parser("history")
     history.add_argument("id")
     history.add_argument("--revision", help="Read a specific SHA256 revision")
@@ -105,6 +120,7 @@ def parser():
     article = commands.add_parser('publish-article', help='Preview or publish one private note as an independent Post; no frontend waiting')
     article.add_argument('--schema', action='store_true', help='Return the JSON request schema without reading a Vault')
     article.add_argument('--request', help='JSON request file, or - for stdin')
+    article.add_argument('--draft', metavar='NOTE_ID', help='Print a prefilled request from one private note; reads only')
     article.add_argument('--apply', action='store_true', help='Execute an explicitly authorized publication')
     article.add_argument('--client-env-file', help='Explicit private dotenv configuration; parsed as data, never executed')
     article.add_argument('--url')
@@ -196,8 +212,13 @@ def dispatch(arguments):
             if arguments.apply or arguments.request:
                 raise LibraryError('--schema cannot be combined with a request or apply')
             return REQUEST_SCHEMA
+        if arguments.draft:
+            if arguments.apply or arguments.request:
+                raise LibraryError('--draft cannot be combined with a request or apply')
+            from .article_publish import draft_request
+            return draft_request(Library(arguments.vault), arguments.draft)
         if not arguments.request:
-            raise LibraryError('publish-article requires --request, or --schema')
+            raise LibraryError('publish-article requires --request, --draft or --schema')
         request = json.loads(_read(arguments.request))
         client = None
         if arguments.apply:
@@ -205,6 +226,19 @@ def dispatch(arguments):
             url, key = client_settings(arguments.client_env_file, url=arguments.url, api_key_env=arguments.api_key_env)
             client = PayloadClient(url, key, arguments.timeout, allow_loopback_http=arguments.allow_loopback_http)
         return publish_article(Library(arguments.vault), request, client=client, apply=arguments.apply)
+    if arguments.command == 'edit':
+        from .note_edit import REQUEST_SCHEMA, edit_note
+        if arguments.schema:
+            return REQUEST_SCHEMA
+        if not arguments.id or not arguments.request:
+            raise LibraryError('edit requires an id and --request, or --schema')
+        return edit_note(Library(arguments.vault), arguments.id, json.loads(_read(arguments.request)),
+                         apply=arguments.apply)
+    if arguments.command == 'tracker-summary':
+        from datetime import datetime, timedelta, timezone
+        from .job_tracker import tracker_summary
+        as_of = arguments.as_of or datetime.now(timezone(timedelta(hours=8))).strftime('%m-%d')
+        return tracker_summary(Library(arguments.vault), arguments.id, as_of=as_of, apply=arguments.apply)
     if arguments.command == "init":
         library = Library.initialize(arguments.vault)
         return {"initialized": True, "vault": str(library.vault)}
@@ -218,6 +252,10 @@ def dispatch(arguments):
         from .checks import check_notes
         return check_notes(library, ids=arguments.ids, kind=arguments.kind, folder=arguments.folder,
                            rules_path=arguments.rules, limit=arguments.limit)
+    if action == 'time-report':
+        from .time_report import time_report
+        return time_report(library, dates=arguments.dates, days=arguments.days, apply=arguments.apply,
+                           create_missing=arguments.create_missing, include_running=arguments.include_running)
     if action == 'sources':
         from .note_queries import note_sources
         return note_sources(library, arguments.id)
@@ -337,6 +375,8 @@ def main(argv=None):
         output = dispatch(arguments)
         print(json.dumps(output, ensure_ascii=False, allow_nan=False))
         if arguments.command == 'publish-article' and output.get('status') == 'needs_review':
+            return 2
+        if arguments.command == 'tracker-summary' and output.get('status') == 'needs_review':
             return 2
         if arguments.command == 'check' and not output['clean']:
             return 2

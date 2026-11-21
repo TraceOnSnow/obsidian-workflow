@@ -67,8 +67,8 @@ def _document(records, previous_base):
     fields = {field['id']: field for field in doc['fields']}
     fields['type'].update(type='select', options=[{'id': key, 'label': value, 'color': 'blue'} for key, value in MEDIA.items()])
     fields['status'].update(type='select', options=[{'id': key, 'label': value, 'color': color} for key, value, color in [
-        ('planned', '待体验', 'gray'), ('in-progress', '进行中', 'blue'),
-        ('completed', '已完成', 'green'), ('on-hold', '暂停', 'yellow'), ('dropped', '已搁置', 'red')]])
+        ('in-progress', '进行中', 'blue'), ('completed', '完成', 'green'),
+        ('on-hold', '搁置', 'yellow'), ('dropped', '弃坑', 'red')]])
     fields['review']['name'] = '感想'
     doc['fields'].append({'id': 'article', 'name': '发表稿', 'type': 'text', 'width': 180})
     field_map = {'formula.work': 'title', 'file.name': 'title', 'rating': 'rating',

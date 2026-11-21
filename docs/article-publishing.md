@@ -7,6 +7,9 @@
 ```sh
 markdown-library --vault /absolute/path/to/vault publish-article --schema
 
+# 只读：从私人稿生成预填请求，输出 {request, existing_post, hints}
+markdown-library --vault /absolute/path/to/vault publish-article --draft NOTE_ID
+
 # 只读预览：不读取凭据，不访问网络，不修改库
 markdown-library --vault /absolute/path/to/vault publish-article \
   --request request.json
@@ -16,6 +19,8 @@ markdown-library --vault /absolute/path/to/vault publish-article \
   --request request.json --apply \
   --client-env-file /absolute/private/client.env
 ```
+
+`--draft` 只读，不访问网络：填入来源 ID 与当前指纹、标题，以及由 `date: YYYY-MM-DD` 属性得到的北京时间中午 `published_at`；已有对应 Post 时改用该 Post 的公开标题和日期（私人标题可能含真实厂名），并在 `existing_post` 中给出路径与链接。面试／笔试复盘会把 `company` 属性放进 `forbidden_terms`，匿名化正文仍由调用方完成。没有日期属性时不猜日期，`hints` 会提示手工填写。输出的 `request` 经审阅、补正文后再交给 `--request`。
 
 请求也可由 stdin 传入：`--request -`。JSON 是工具参数，不是逐次编写的脚本。Python 调用方可直接使用 `article_publish.publish_article(library, request, client=client, apply=True)`；JSON Schema 由 `--schema` 或模块的 `REQUEST_SCHEMA` 提供，两者使用同一运行时校验。
 

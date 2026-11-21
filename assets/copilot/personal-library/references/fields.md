@@ -8,7 +8,7 @@
 | kind | note普通笔记、work作品、post文章；不通过文件夹猜类型 |
 | title / type | 作品标题与媒体类型，在总表维护 |
 | rating | 0–100；85就是85分，null未知，0有效；可保留小数，新输入5就是5分 |
-| status | planned待体验、in-progress进行中、completed已完成、on-hold暂停、dropped已搁置 |
+| status | in-progress进行中、completed完成（游戏通关／动漫与电视剧追完／书读完）、on-hold搁置、dropped弃坑；电影与桌游不填 |
 | cloud | 云：看别人实况、解说体验的勾选标记，与状态无关，任何类型都可用；勾选为true，不勾即缺省，在总表“云”列维护，只按本人说法勾选 |
 | note | 可能公开的卡片短评；完整私人感想写关联正文 |
 | experiences | 完整体验记录，包含startedOn／endedOn等；总表日期编辑第一段，其他段及行ID保留 |

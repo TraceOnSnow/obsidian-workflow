@@ -21,7 +21,7 @@ WORKFLOW = """# 个人 Markdown 内容库工作流
 
 搜索/读取：search_notes按标题和正文查询，仅返回有限摘要；get_note按稳定ID读取完整当前稿与SHA。多份同名内容先确认身份和用途。
 写作：忠实保存用户背景、思考、例子和细节，区分用户经历、AI补充、设想和实际结果。优先编辑现有稿件。create_note用于用户明确要求落库的当前讨论，source_id应为本次入库稳定唯一标识，重试复用同一值。普通新稿进入收件箱。
-修改：先get_note，再replace_note传完整Markdown和expected_hash，保留所有属性，按用户范围修改。冲突时重读差异，不能直接换SHA强行覆盖。使用note_history读取旧稿，restore_note将指定旧稿恢复成新当前稿。
+修改：先get_note；局部修改用edit_note传原文/新文片段（原文须按count精确出现）和expected_hash，整篇重写才用replace_note传完整Markdown和expected_hash；保留所有属性，按用户范围修改。冲突时重读差异，不能直接换SHA强行覆盖。使用note_history读取旧稿，restore_note将指定旧稿恢复成新当前稿。
 分类：00_收件箱与notes保留待辨认、待核对材料；05_想法池保留本人已认领、值得继续想但未承诺推进的种子，不要求实现方案或排期；正式主题目录保留完整文章、当前设计和阶段总结。10_个人记录按生活、日记和求职阶段组织，20_项目与构想按项目组织，30_知识与参考按主题组织；90_归档保留历史。本人认领、稿件成熟度与实施进度分别判断，不把AI方案自动认领。move_note沿用ID并修复链接，不复制正文；整理授权以当前批次为限。
 作品：works中的rating、status、note分别是评分、体验进度、短感受；rating采用0–100百分制，通常输入整数，85表示原十分制8.5，允许保留已有小数精度；不知道的值留空。Work私人正文不因卡片公开而公开。Work.article支持引用Post稳定ID或原生双链。posts和works物理目录保留，主题导航引用同一份正文。
 合并：先分别get_note并比较，列出来源、主稿和保留的独有内容。用户同意目标组后才merge_notes，传所有当前SHA、完整主稿Markdown，保留主稿全部属性；只可回收未映射的note源，不能用合并撤回网站文章。不同用途或不同版本不按标题强行合并。结果包含可恢复源记录。
@@ -64,8 +64,13 @@ def refresh_navigation(library):
         return {'state': 'needs_refresh', 'message': 'Content operation succeeded; existing navigation retained. Refresh locally after review.'}
 
 
-def build_server(vault: str | Path, *, read_only=False, fastmcp_options=None):
+def build_server(vault: str | Path, *, read_only=False, fastmcp_options=None, profile_path=None):
     library = Library(vault).validate()
+    profile = None
+    if profile_path:
+        profile = Path(profile_path).expanduser()
+        if not profile.is_absolute() or profile.resolve().is_relative_to(Path(vault).resolve()):
+            raise ValueError('profile_path must be an absolute path outside the Vault')
     server = LibraryMCP('个人 Markdown 内容库', instructions=INSTRUCTIONS, log_level='WARNING',
                         **(fastmcp_options or {}))
     read = ToolAnnotations(readOnlyHint=True, destructiveHint=False,
@@ -118,6 +123,18 @@ def build_server(vault: str | Path, *, read_only=False, fastmcp_options=None):
         bounded_markdown(note['markdown'])
         return note
 
+    if profile is not None:
+        @tool(annotations=read, title='读取本人档案')
+        def get_personal_profile() -> dict[str, Any]:
+            """Read the user's current personal profile: who they are, job search, values, tastes and how they
+            like to work with AI. Generated from their notes and chats; use it as background about the user."""
+            if not profile.is_file():
+                raise LibraryError('No personal profile has been exported yet')
+            markdown = profile.read_text(encoding='utf-8')
+            bounded_markdown(markdown)
+            return {'markdown': markdown, 'updated_at': profile.stat().st_mtime,
+                    'note': 'Generated summary about the user; their own notes take precedence when they differ.'}
+
     @tool(annotations=read, title='查询历史或读取旧稿')
     def note_history(note_id: str, revision: str | None = None) -> dict[str, Any]:
         """List saved versions, or read an exact revision SHA; does not change the current draft."""
@@ -163,6 +180,21 @@ def build_server(vault: str | Path, *, read_only=False, fastmcp_options=None):
             note = library.replace(note_id, markdown, expected_hash=expected_hash)
             return summary(note) | {'publication_selected': False}
 
+        @tool(annotations=write, title='局部修改当前稿')
+        def edit_note(note_id: str, edits: list[dict[str, Any]], expected_hash: str) -> dict[str, Any]:
+            """Apply exact old/new text edits to a previously read draft. Each edit is {old, new, count?}; old must occur exactly count times (default 1) or nothing is saved. Never publishes."""
+            from .note_edit import apply_edits
+            current = library.get(note_id)
+            library._expect(current, expected_hash)
+            markdown = apply_edits(current['markdown'], edits)
+            bounded_markdown(markdown)
+            props, _ = _split(markdown)
+            for key in ('id', 'kind', 'schema_version', 'protectedContent', 'payload_observed_status'):
+                if props.get(key) != current['properties'].get(key):
+                    raise LibraryError('Preserve identity and protected observation properties: ' + key)
+            note = library.replace(note_id, markdown, expected_hash=expected_hash)
+            return summary(note) | {'publication_selected': False}
+
         @tool(annotations=write, title='恢复历史为当前稿')
         def restore_note(note_id: str, revision: str, expected_hash: str) -> dict[str, Any]:
             """Restore a chosen history revision guarded by current SHA; creates a current draft, never publishes."""
@@ -199,8 +231,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--vault', required=True, help='Fixed initialized Vault; remote callers cannot change it')
     parser.add_argument('--read-only', action='store_true', help='Expose only the four reading tools')
+    parser.add_argument('--profile', help='Optional exported personal profile file (outside the Vault), served read-only')
     args = parser.parse_args()
-    build_server(args.vault, read_only=args.read_only).run(transport='stdio')
+    build_server(args.vault, read_only=args.read_only, profile_path=args.profile).run(transport='stdio')
 
 
 if __name__ == '__main__':

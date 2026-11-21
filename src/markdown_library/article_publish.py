@@ -283,6 +283,47 @@ def _finish(library, source_id, post_id, url):
             library._commit(state, writes, removals)
 
 
+def draft_request(library, note_id):
+    """Prefill a request from one private note; the caller reviews and edits it before preview."""
+    note = library.get(note_id)
+    properties = note['properties']
+    if properties.get('kind') != 'note':
+        raise LibraryError('Drafts start from a private note; Work reviews use prepare-work-review')
+    request = {'source_note_id': note_id, 'expected_source_hash': note['sha256'], 'title': properties['title']}
+    hints = []
+    date = properties.get('date')
+    if isinstance(date, str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}', date):
+        # A plain date is shown at noon in the site's timezone (Beijing).
+        request['published_at'] = date + 'T12:00:00+08:00'
+    else:
+        hints.append('No YYYY-MM-DD date property: set published_at explicitly; never guess an unknown date')
+    state, notes = _index(library)
+    candidates = sorted({row['id'] for row in state['sources'].values()
+                         if any(row.get('source', {}).get(field) == note_id
+                                for field in ('note_id', 'private_source_id', 'source_note_id'))}
+                        | ({state['sources']['publication-copy:' + note_id]['id']}
+                           if 'publication-copy:' + note_id in state['sources'] else set()))
+    existing = None
+    if len(candidates) == 1 and candidates[0] in notes:
+        post = notes[candidates[0]]
+        existing = {'post_id': post['id'], 'path': post['path'], 'title': post['properties'].get('title'),
+                    'link': post['properties'].get('link'), 'publishedAt': post['properties'].get('publishedAt')}
+        # The Post keeps its own public title and date; the private title may name the employer.
+        if existing['title']:
+            request['title'] = existing['title']
+        if existing['publishedAt']:
+            request['published_at'] = existing['publishedAt']
+        hints.append('An existing Post is reused with its own title and date; its link, categories and tags carry over unless set here')
+    elif len(candidates) > 1:
+        hints.append('Several Posts refer to this note; resolve the relationship before publishing')
+    company = properties.get('company')
+    if properties.get('record_type') in {'面试复盘', '笔试复盘'} and isinstance(company, str) and company:
+        request['forbidden_terms'] = [company]
+        hints.append('Job review: anonymize the employer in title and body per the policy (秋招 XX, 暑期 某X厂) '
+                     'and add other identifying names to forbidden_terms')
+    return {'status': 'draft', 'request': request, 'existing_post': existing, 'hints': hints}
+
+
 def publish_article(library, request, *, client=None, apply=False):
     """Preview offline, or prepare/select/sync/verify/finish one approved article."""
     validate_request(request)

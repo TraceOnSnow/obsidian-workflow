@@ -38,7 +38,7 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                 init = await session.initialize()
                 self.assertIn('get_workflow', init.instructions)
                 tools = (await session.list_tools()).tools
-                self.assertEqual(len(tools), 11)
+                self.assertEqual(len(tools), 12)
                 self.assertFalse(any('publish' in t.name or 'shell' in t.name for t in tools))
                 self.assertLess(len(json.dumps([t.model_dump(exclude_none=True) for t in tools])), 19000)
                 annotations = {t.name: t.annotations for t in tools}
@@ -56,6 +56,15 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.library.get(note_id)['markdown'], updated)
                 await self.call(session, 'replace_note', {
                     'note_id': note_id, 'markdown': note['markdown'], 'expected_hash': note['sha256']}, error=True)
+                edited = await self.call(session, 'edit_note', {'note_id': note_id, 'expected_hash': saved['sha256'],
+                    'edits': [{'old': '第二版细节', 'new': '第二版具体细节'}]})
+                self.assertIn('第二版具体细节', self.library.get(note_id)['markdown'])
+                await self.call(session, 'edit_note', {'note_id': note_id, 'expected_hash': edited['sha256'],
+                    'edits': [{'old': '不存在的原文', 'new': 'x'}]}, error=True)
+                await self.call(session, 'edit_note', {'note_id': note_id, 'expected_hash': edited['sha256'],
+                    'edits': [{'old': 'kind: note', 'new': 'kind: post'}]}, error=True)
+                saved = await self.call(session, 'replace_note', {'note_id': note_id, 'markdown': updated,
+                    'expected_hash': edited['sha256']})
                 retry = await self.call(session, 'create_note', {
                     'title': 'different', 'markdown': 'must not replace', 'source_id': 'test:001'})
                 self.assertEqual(retry['id'], note_id)
@@ -151,6 +160,27 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(result['readback_verified'])
                 self.assertEqual(len(result['moves']), 2)
                 self.assertEqual((await self.call(session, 'note_sources', {'note_id': a['id']}))['id'], a['id'])
+
+    async def test_profile_tool_is_optional_read_only_and_outside_vault(self):
+        async with stdio_client(self.params()) as (reader, writer):
+            async with ClientSession(reader, writer) as session:
+                await session.initialize()
+                names = {t.name for t in (await session.list_tools()).tools}
+                self.assertNotIn('get_personal_profile', names)
+        profile = Path(self.tmp.name) / 'profile.md'
+        async with stdio_client(self.params('--profile', str(profile))) as (reader, writer):
+            async with ClientSession(reader, writer) as session:
+                await session.initialize()
+                tools = {t.name: t for t in (await session.list_tools()).tools}
+                self.assertTrue(tools['get_personal_profile'].annotations.readOnlyHint)
+                await self.call(session, 'get_personal_profile', error=True)
+                profile.write_text('# 档案\n\n他喜欢小而精的游戏。\n', encoding='utf-8')
+                result = await self.call(session, 'get_personal_profile')
+                self.assertIn('小而精', result['markdown'])
+        with self.assertRaises(ValueError):
+            build_server(self.vault, profile_path=self.vault / 'profile.md')
+        with self.assertRaises(ValueError):
+            build_server(self.vault, profile_path='relative/profile.md')
 
     def test_missing_vault_never_initialized(self):
         missing = Path(self.tmp.name) / 'missing'

@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from markdown_library import Library, LibraryError
-from markdown_library.article_publish import publish_article, client_settings, REQUEST_SCHEMA
+from markdown_library.article_publish import publish_article, client_settings, draft_request, REQUEST_SCHEMA
 from markdown_library.core import _split
 from markdown_library.publication_navigation import strip_publication_navigation as strip
 from markdown_library.transport import sync_once
@@ -52,6 +52,23 @@ class ArticlePublishTests(unittest.TestCase):
                    'replacements': {}}
         preview = publish_article(self.library, request)
         self.assertEqual(preview['public_markdown'], '\n\n# ' + request['title'] + '\n\nQuestion')
+
+    def test_draft_prefills_from_note_and_reuses_post_title(self):
+        review = self.library.create('# 03-17 面经\n\n内容\n', title='03-17 【RealCorp】 面经',
+            properties={'record_type': '面试复盘', 'company': 'RealCorp', 'date': '2026-03-17'})
+        before = self.files()
+        draft = draft_request(self.library, review['id'])
+        self.assertEqual(before, self.files())
+        self.assertEqual(draft['request'], {'source_note_id': review['id'], 'expected_source_hash': review['sha256'],
+            'title': '03-17 【RealCorp】 面经', 'published_at': '2026-03-17T12:00:00+08:00',
+            'forbidden_terms': ['RealCorp']})
+        self.assertIsNone(draft['existing_post'])
+        self.assertIsNone(draft_request(self.library, self.note['id'])['request'].get('published_at'))
+        self.call()
+        again = draft_request(self.library, self.note['id'])
+        self.assertEqual(again['request']['title'], '2026-03-17 Example interview')
+        self.assertEqual(again['request']['published_at'], '2026-03-17T12:00:00+08:00')
+        self.assertIsNotNone(again['existing_post'])
 
     def test_one_call_publishes_verifies_keeps_publication_folder_and_links_only_target(self):
         unrelated = self.library.create('Other article', title='Other', kind='post', properties={'link': 'other'})

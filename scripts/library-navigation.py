@@ -24,7 +24,7 @@ PAGE_FOLDERS = ('00_收件箱', '05_想法池')
 BASE_NAME = '实时目录.base'
 INBOX_BASE = '00_收件箱/待整理（实时）.base'
 ALL_BASE = '全部笔记.base'
-RESERVED_ROOTS = {'works', '发表稿', 'posts', 'notes', 'copilot', 'assets', 'config', 'templates'}
+RESERVED_ROOTS = {'works', '发表稿', 'posts', 'notes', 'copilot', 'assets', 'config', 'templates', 'TaskNotes'}
 UTILITY_NAMES = ('索引', '首页', '笔记目录', '网站内容', '发布与同步状态', '使用说明',
                  'Copilot库内助手', 'AGENTS', 'CLAUDE', 'HANDOFF', 'PLAN', 'README', 'SKILL')
 
@@ -42,7 +42,7 @@ def content_filters():
     return [
         'file.ext == "md"',
         '!/(^|\\/)\\./.matches(file.path)',
-        '!/(^|\\/)(copilot|assets|config|templates)(\\/|$)/.matches(file.path)',
+        '!/(^|\\/)(copilot|assets|config|templates|TaskNotes)(\\/|$)/.matches(file.path)',
         '!/(^|\\/)(' + '|'.join(UTILITY_NAMES) + ')\\.md$/.matches(file.path)',
         'kind != "work"',
         '!file.inFolder("works")',
@@ -95,7 +95,7 @@ def discover(vault, items):
     for directory, names, files in os.walk(vault, followlinks=False):
         names[:] = sorted(name for name in names if not name.startswith('.')
                           and not (Path(directory) / name).is_symlink()
-                          and name not in {'copilot', 'assets', 'config', 'templates'}
+                          and name not in {'copilot', 'assets', 'config', 'templates', 'TaskNotes'}
                           and not (Path(directory) == vault and name in RESERVED_ROOTS))
         for name in sorted(files):
             path = Path(directory) / name

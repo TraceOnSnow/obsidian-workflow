@@ -156,7 +156,7 @@ def build_http_app(vault: str | Path, config: Mapping[str, Any]) -> Starlette:
     scopes = ['library:read'] if read_only else list(SCOPES)
     provider = PersonalOAuthProvider(db_path, issuer_url, resource_url,
         config['owner_password_hash'], allowed_redirect_uris=config.get('allowed_redirect_uris', ()))
-    server = build_server(vault_path, read_only=read_only, fastmcp_options={
+    server = build_server(vault_path, read_only=read_only, profile_path=config.get('profile_path'), fastmcp_options={
         'token_verifier': provider,
         'auth': AuthSettings(issuer_url=issuer_url, resource_server_url=resource_url,
                              required_scopes=scopes, validate_token_resource=True),
