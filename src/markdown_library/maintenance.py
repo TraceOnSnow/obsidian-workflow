@@ -33,7 +33,7 @@ def _render(root, library, entry):
     if mode == 'policy':
         # The operational policy is authoritative; historical batches and server
         # implementation notes are not part of the offline writing instructions.
-        text = text.split('\n## 公开身份', 1)[0]
+        text = text.split('\n## 服务器附注', 1)[0]
         text = re.sub(r'\[([^\]]+)\]\((?!https?://)[^)]+\)', r'\1', text)
         return ('<!-- markdown-library:policy-projection:v1 -->\n'
                 '<!-- Generated from the current editorial policy; edit the source through maintenance. -->\n'

@@ -112,7 +112,7 @@ class MaintenanceTests(unittest.TestCase):
 
     def test_policy_projection_excludes_history_and_resolves_offline_references(self):
         (self.root / 'source.md').write_text('# Rules\n\n[Server guide](guide.md) and [web](https://example.org).\n'
-                                             '\n## 公开身份\n\nServer-only details\n')
+                                             '\n## 服务器附注\n\nServer-only details\n')
         self.config['files'][0]['render'] = 'policy'
         self.config['files'][0]['target'] = 'config/整理与发表规约.md'
         self.save_manifest()
