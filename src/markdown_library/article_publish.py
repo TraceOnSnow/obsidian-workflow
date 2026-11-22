@@ -319,7 +319,7 @@ def draft_request(library, note_id):
     company = properties.get('company')
     if properties.get('record_type') in {'面试复盘', '笔试复盘'} and isinstance(company, str) and company:
         request['forbidden_terms'] = [company]
-        hints.append('Job review: anonymize the employer in title and body per the policy (秋招 XX, 暑期 某X厂) '
+        hints.append('Job review: anonymize the employer in title and body per the policy (秋招 A公司 + coarse role such as 开发岗, 暑期 某X厂) '
                      'and add other identifying names to forbidden_terms')
     return {'status': 'draft', 'request': request, 'existing_post': existing, 'hints': hints}
 
