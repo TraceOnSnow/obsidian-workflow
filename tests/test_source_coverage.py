@@ -89,10 +89,75 @@ class SourceCoverageTests(unittest.TestCase):
         with self.assertRaisesRegex(LibraryError, 'different account or conversation'):
             cover_source(self.library, self.note['id'], mismatch, expected_hash=self.note['sha256'])
 
-    def test_same_source_for_another_note_is_refused(self):
-        self.apply(self.note, covered())
-        with self.assertRaisesRegex(LibraryError, 'already registered to another note'):
-            cover_source(self.library, self.other['id'], covered(), expected_hash=self.other['sha256'])
+    def test_same_evidence_can_cover_two_notes(self):
+        _, first = self.apply(self.note, covered())
+        preview, second = self.apply(self.other, covered())
+        self.assertEqual((preview['outcome'], second['status']), ('new', 'completed'))
+        self.assertNotEqual(first['source_ref'], second['source_ref'])
+        self.assertEqual([row['note_id'] for row in preview['related_sources']], [self.note['id']])
+        sources = self.state()['sources']
+        self.assertEqual((sources[first['source_ref']]['id'], sources[second['source_ref']]['id']),
+                         (self.note['id'], self.other['id']))
+        before = self.state()
+        _, again = self.apply(self.other, covered())
+        self.assertEqual((again['status'], again['matched_source_ref'], again['legacy_ref']),
+                         ('unchanged', second['source_ref'], False))
+        self.assertEqual(self.state(), before)
+
+    def legacy(self, note, source, ref):
+        """A covered record shaped like the 11-07 batch: its ref also hashed the target and upstream source."""
+        state = self.library._read_state()
+        state['sources'][ref] = {'id': note['id'], 'source': source}
+        self.library._save(state)
+        return self.state()
+
+    def test_legacy_equivalent_record_is_recognised(self):
+        stored = covered(messages=('msg-b', 'msg-a'), actor='authorized-editorial-batch', decision='旧批次判断',
+                         original_failed_job_unchanged={'job_id': 'job-synthetic'})
+        stored['evidence'][0] |= {'id': 'm002', 'primary': False}
+        legacy_ref = COVERED_TYPE + ':' + sha('legacy synthetic identity')
+        before = self.legacy(self.note, stored, legacy_ref)
+        preview, result = self.apply(self.note, covered(messages=('msg-a', 'msg-b'), decision='旧批次判断'))
+        self.assertEqual((preview['outcome'], result['status']), ('existing', 'unchanged'))
+        self.assertNotEqual(result['source_ref'], legacy_ref)
+        self.assertEqual((result['matched_source_ref'], result['legacy_ref']), (legacy_ref, True))
+        self.assertEqual(result['record']['source']['actor'], 'authorized-editorial-batch')
+        self.assertNotIn(legacy_ref, [row['source_ref'] for row in result['related_sources']])
+        self.assertTrue(result['differs_from_existing'])
+        self.assertEqual(result['differing_fields'], ['actor', 'evidence'])
+        self.assertEqual(self.state(), before)
+
+    def test_legacy_record_with_other_note_or_evidence_is_not_a_match(self):
+        self.legacy(self.other, covered(), COVERED_TYPE + ':' + sha('legacy other note'))
+        self.legacy(self.note, covered(messages=('msg-a', 'msg-b')), COVERED_TYPE + ':' + sha('legacy superset'))
+        self.legacy(self.note, covered(conversation='conv-other'), COVERED_TYPE + ':' + sha('legacy other chat'))
+        preview, result = self.apply(self.note, covered())
+        self.assertEqual((preview['outcome'], result['status']), ('new', 'completed'))
+        self.assertNotIn('matched_source_ref', result)
+        self.assertEqual(len(result['related_sources']), 3)
+
+    def test_repeat_with_different_details_reports_fields_without_rewriting(self):
+        _, first = self.apply(self.note, covered(decision='第一次判断'))
+        before = self.state()
+        same = cover_source(self.library, self.note['id'], covered(decision='第一次判断'),
+                            expected_hash=self.note['sha256'])
+        self.assertEqual((same['differs_from_existing'], same['differing_fields']), (False, []))
+        changed = covered(decision='换一种说法', actor='someone-else',
+                          input_source={'conversation_id': 'conv-synthetic-1', 'object_path': 'objects/x.json'})
+        preview, again = self.apply(self.note, changed)
+        self.assertEqual(preview['source_ref'], first['source_ref'])
+        self.assertEqual(again['status'], 'unchanged')
+        self.assertTrue(again['differs_from_existing'])
+        self.assertEqual(again['differing_fields'], ['decision', 'actor', 'input_source'])
+        self.assertEqual(again['record']['source']['decision'], '第一次判断')
+        self.assertEqual(self.state(), before)
+
+    def test_pending_transaction_names_recovery_not_bootstrap(self):
+        (self.library.vault / '.markdown-library/transaction.json').write_text('{}')
+        with self.assertRaises(LibraryError) as caught:
+            cover_source(self.library, self.note['id'], covered(), expected_hash=self.note['sha256'])
+        self.assertIn('ordinary library recovery', str(caught.exception))
+        self.assertNotIn('bootstrap', str(caught.exception).lower())
 
     def test_related_registrations_are_reported(self):
         self.apply(self.note, covered(messages=('msg-a',)))

@@ -1,7 +1,8 @@
 """Record that an existing note already covers an upstream chat source.
 
-Only the private source mapping changes: the note body, path and hash stay as
-they are. Preview is the default; apply needs the preview token and the note's
+Identity is the target note plus the covered evidence, so one conversation may
+be registered to several notes. Only the private source mapping changes: the
+note body, path and hash stay as they are. Preview is the default; apply needs the preview token and the note's
 current hash, and the mapping is read back after the guarded commit.
 """
 
@@ -29,6 +30,10 @@ REQUEST_SCHEMA = {
     'actor': 'optional: who decided; default manual-editorial',
     'input_source': 'optional: the upstream source mapping (account, conversation, path, hashes), kept as given',
 }
+
+
+def _order(ref):
+    return ref['source_message_id'], ref['role'], ref['text_sha256']
 
 
 def _text(value, name, limit=500):
@@ -63,7 +68,7 @@ def normalize_source(source):
                 raise LibraryError('evidence primary must be true or false')
             item['primary'] = ref['primary']
         refs.append(item)
-    refs.sort(key=lambda r: (r['source_message_id'], r['role'], r['text_sha256']))
+    refs.sort(key=_order)
     if len({r['source_message_id'] for r in refs}) != len(refs):
         raise LibraryError('Each source message may appear only once in evidence')
     if not any(r['role'] == 'user' for r in refs):
@@ -87,19 +92,68 @@ def normalize_source(source):
     return record
 
 
-def source_ref(record):
-    evidence = [{key: ref[key] for key in sorted(_EVIDENCE_FIELDS)} for ref in record['evidence']]
-    identity = {'account_key': record['account_key'], 'conversation_id': record['conversation_id'], 'evidence': evidence}
+def source_ref(note_id, record):
+    """The target note is part of identity, so one conversation's evidence may cover several notes."""
+    identity = {'note_id': note_id, 'account_key': record['account_key'],
+                'conversation_id': record['conversation_id'], 'evidence': _evidence_key(record['evidence'])}
     return COVERED_TYPE + ':' + _hash(json.dumps(identity, ensure_ascii=False, sort_keys=True))
 
 
-def _related(state, record, ref):
+def _evidence_key(evidence):
+    """Identity fields only, in a fixed order; workbench id/primary do not count."""
+    return [{key: ref[key] for key in sorted(_EVIDENCE_FIELDS)} for ref in sorted(evidence, key=_order)]
+
+
+def _equivalent(row, note_id, record):
+    """An earlier registration of the same note, conversation and evidence set, whatever its ref algorithm."""
+    if not isinstance(row, dict) or row.get('id') != note_id:
+        return False
+    source = row.get('source')
+    if not isinstance(source, dict) or source.get('type') != COVERED_TYPE \
+            or source.get('conversation_id') != record['conversation_id'] \
+            or source.get('account_key') not in (None, record['account_key']):
+        return False
+    evidence = source.get('evidence')
+    if not isinstance(evidence, list) or not all(isinstance(r, dict) and _EVIDENCE_FIELDS <= set(r) for r in evidence):
+        return False
+    try:
+        return _evidence_key(evidence) == _evidence_key(record['evidence'])
+    except TypeError:
+        return False
+
+
+def _existing(state, note_id, record, ref):
+    """The stored registration this request repeats: its own ref first, then an equivalent older one."""
+    if ref in state['sources']:
+        return ref, state['sources'][ref]
+    for key, row in sorted(state['sources'].items()):
+        if key.startswith(COVERED_TYPE + ':') and _equivalent(row, note_id, record):
+            return key, row
+    return None, None
+
+
+def _differences(existing, record):
+    """Request fields that differ from what is stored; a repeat never rewrites them."""
+    stored = existing.get('source') if isinstance(existing, dict) else None
+    stored = stored if isinstance(stored, dict) else {}
+    fields = [key for key in ('decision', 'actor', 'input_source') if stored.get(key) != record.get(key)]
+    evidence = stored.get('evidence')
+    try:
+        same_evidence = sorted(evidence, key=_order) == record['evidence']
+    except (TypeError, KeyError):
+        same_evidence = False
+    if not same_evidence:
+        fields.append('evidence')
+    return fields
+
+
+def _related(state, record, *skip):
     """Other registrations naming the same conversation or the same messages."""
     ids = {r['source_message_id'] for r in record['evidence']}
     digests = {r['text_sha256'] for r in record['evidence']}
     related = []
     for key, row in sorted(state['sources'].items()):
-        if key == ref or not isinstance(row, dict):
+        if key in skip or not isinstance(row, dict):
             continue
         source = row.get('source')
         encoded = json.dumps(source, ensure_ascii=False) if isinstance(source, dict) else ''
@@ -119,10 +173,10 @@ def cover_source(library, note_id, source, *, expected_hash, apply=False, expect
     if apply and not expected_token:
         raise LibraryError('Apply requires the token returned by a current preview')
     record = normalize_source(source)
-    ref = source_ref(record)
+    ref = source_ref(note_id, record)
     library.validate()
     with library._lock():
-        state, notes = _index(library)
+        state, notes = _read_index(library, _index)
         if state.get('rating_scale') != 100:
             raise LibraryError('Legacy rating scale requires explicit migration before library operations')
         note = library._required(notes, note_id)
@@ -131,20 +185,24 @@ def cover_source(library, note_id, source, *, expected_hash, apply=False, expect
         library._expect(note, expected_hash)
         if note['properties']['kind'] == 'post':
             raise LibraryError('Register source coverage on the private note or Work, not on a Post')
-        previous = state['sources'].get(ref)
-        if previous is not None:
-            if not isinstance(previous, dict) or previous.get('id') != note_id:
-                raise LibraryError(f'Source {ref} is already registered to another note: {previous.get("id") if isinstance(previous, dict) else "invalid"}')
+        matched, previous = _existing(state, note_id, record, ref)
+        if previous is not None and (not isinstance(previous, dict) or previous.get('id') != note_id):
+            raise LibraryError(f'Source {ref} is already registered to another note: {previous.get("id") if isinstance(previous, dict) else "invalid"}')
         entry = {'id': note_id, 'source': record}
-        token = _hash(json.dumps({'version': 1, 'operation': 'cover-source', 'vault': str(library.vault.resolve()),
+        token = _hash(json.dumps({'version': 2, 'operation': 'cover-source', 'vault': str(library.vault.resolve()),
                                   'note_id': note_id, 'sha256': note['sha256'], 'source_ref': ref,
-                                  'entry': entry, 'previous': previous}, ensure_ascii=False, sort_keys=True))
+                                  'matched_source_ref': matched, 'entry': entry, 'previous': previous},
+                                 ensure_ascii=False, sort_keys=True))
         result = {'id': note_id, 'path': note['path'], 'sha256': note['sha256'],
                   'title': note['properties']['title'], 'source_ref': ref,
                   'record': copy.deepcopy(previous if previous is not None else entry),
                   'outcome': 'existing' if previous is not None else 'new',
-                  'related_sources': _related(state, record, ref),
+                  'related_sources': _related(state, record, ref, matched),
                   'token': token, 'applied': False, 'body_unchanged': True, 'publication_selected': False}
+        if previous is not None:
+            differing = _differences(previous, record)
+            result |= {'matched_source_ref': matched, 'legacy_ref': matched != ref,
+                       'differs_from_existing': bool(differing), 'differing_fields': differing}
         if not apply:
             return result | {'status': 'preview'}
         if expected_token != token:
@@ -155,10 +213,21 @@ def cover_source(library, note_id, source, *, expected_hash, apply=False, expect
         # Only the private mapping changes, so no Work catalog storage is involved.
         library._commit(state, storage_resolved=True)
         try:
-            actual_state, actual_notes = _index(library)
+            actual_state, actual_notes = _read_index(library, _index)
             verified = (actual_state['sources'].get(ref) == entry
                         and actual_notes.get(note_id, {}).get('sha256') == note['sha256'])
         except (OSError, LibraryError):
             verified = False
         return result | {'applied': True, 'status': 'completed' if verified else 'needs_review',
                          'readback_verified': verified}
+
+
+def _read_index(library, index):
+    """The shared reader names bootstrap when a transaction is pending; say what cover-source needs instead."""
+    try:
+        return index(library)
+    except LibraryError:
+        if library._path('.markdown-library/transaction.json').exists():
+            raise LibraryError('An interrupted library transaction is pending; finish ordinary library recovery '
+                               'first, then preview cover-source again') from None
+        raise
