@@ -76,7 +76,7 @@ class MCPConcurrencyTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('/secret/server/path', str(caught.exception))
 
     async def test_tool_schemas_match_the_plain_sync_functions(self):
-        for read_only, count in ((False, 12), (True, 5)):
+        for read_only, count in ((False, 13), (True, 6)):
             server = build_server(self.vault, read_only=read_only)
             tools = server._tool_manager.list_tools()
             self.assertEqual(len(tools), count)

@@ -1,4 +1,5 @@
 """Bounded note and provenance reads; no checkpoint or hidden-state access by callers."""
+import copy
 import json
 import math
 from pathlib import Path, PurePosixPath
@@ -15,30 +16,75 @@ def summary(note):
         'kind': note['properties']['kind'], 'title': note['properties']['title']}
 
 
-def search_notes(library, query='', *, kind=None, folder=None, limit=20, offset=0):
+MAX_QUERIES = 10
+
+
+def search_notes(library, query='', *, kind=None, folder=None, limit=20, offset=0, queries=None):
+    """One query returns a page; ``queries`` runs up to MAX_QUERIES separate
+    searches over a single index read and lock, one result block per query."""
     library.validate()
     if kind not in (None, 'note', 'work', 'post') or not 1 <= limit <= 50 or offset < 0:
         raise LibraryError('Use kind note/work/post, limit 1..50, and nonnegative offset')
-    if len(query) > 500 or (folder is not None and (not folder or '\\' in folder or
+    if queries is not None and (query or not 1 <= len(queries) <= MAX_QUERIES
+                                or not all(isinstance(q, str) for q in queries)):
+        raise LibraryError(f'Pass either query or 1..{MAX_QUERIES} queries')
+    if any(len(q) > 500 for q in (queries or [query])) or (folder is not None and (not folder or '\\' in folder or
             PurePosixPath(folder).is_absolute() or any(p.startswith('.') for p in PurePosixPath(folder).parts))):
         raise LibraryError('Invalid query or visible folder scope')
     prefix = folder.rstrip('/') + '/' if folder else None
     with library._lock():
         notes = sorted(_index(library)[1].values(), key=lambda n: n['path'])
-        terms = list(dict.fromkeys(query.casefold().split()))
-        texts = {n['id']: n['markdown'].casefold() for n in notes} if terms else {}
-        hits = [n for n in notes if all(term in texts[n['id']] for term in terms)
-                and (kind is None or n['properties']['kind'] == kind)
-                and (prefix is None or n['path'].startswith(prefix))]
-        if terms:
-            # Every managed note is already in memory for this read, so rank in
-            # place instead of keeping a derived index that could go stale.
-            scores = _relevance(notes, texts, terms)
-            hits.sort(key=lambda n: (-scores[n['id']], n['path']))
-    return {'total': len(hits), 'offset': offset,
-            'items': [summary(n) | ({'snippet': _snippet(n['markdown'], terms)} if terms else {})
-                      for n in hits[offset:offset + limit]],
-            'next_offset': offset + limit if offset + limit < len(hits) else None}
+        scoped = [n for n in notes if (kind is None or n['properties']['kind'] == kind)
+                  and (prefix is None or n['path'].startswith(prefix))]
+        texts = None
+        results = []
+        for text in (queries if queries is not None else [query]):
+            terms = list(dict.fromkeys(text.casefold().split()))
+            if terms and texts is None:
+                texts = {n['id']: n['markdown'].casefold() for n in notes}
+            hits = [n for n in scoped if all(term in texts[n['id']] for term in terms)]
+            if terms:
+                # Every managed note is already in memory for this read, so rank in
+                # place instead of keeping a derived index that could go stale.
+                scores = _relevance(notes, texts, terms)
+                hits.sort(key=lambda n: (-scores[n['id']], n['path']))
+            results.append({'total': len(hits), 'offset': offset,
+                'items': [summary(n) | ({'snippet': _snippet(n['markdown'], terms)} if terms else {})
+                          for n in hits[offset:offset + limit]],
+                'next_offset': offset + limit if offset + limit < len(hits) else None})
+    if queries is None:
+        return results[0]
+    return {'results': [{'query': q} | r for q, r in zip(queries, results)]}
+
+
+MAX_BATCH_NOTES = 20
+MAX_BATCH_BYTES = 1024 * 1024
+
+
+def get_notes(library, note_ids):
+    """Full current drafts for several stable IDs under one lock. Unknown IDs are
+    reported per item; notes beyond the byte budget are listed for a later call."""
+    if not isinstance(note_ids, list) or not 1 <= len(note_ids) <= MAX_BATCH_NOTES:
+        raise LibraryError(f'Pass 1..{MAX_BATCH_NOTES} note IDs')
+    ids = list(dict.fromkeys(note_ids))
+    with library._lock():
+        # Same logical view as Library.get (Works merge table fields), one scan.
+        state = library._load()
+        index = library._scan(state)
+        library._save(state)
+        notes, missing, deferred, used = [], [], [], 0
+        for note_id in ids:
+            note = index.get(note_id) if isinstance(note_id, str) else None
+            if note is None:
+                missing.append(note_id)
+                continue
+            size = len(note['markdown'].encode('utf-8'))
+            if notes and used + size > MAX_BATCH_BYTES:
+                deferred.append(note_id)
+                continue
+            used += size
+            notes.append(copy.deepcopy(note))
+    return {'notes': notes, 'missing': missing, 'deferred': deferred}
 
 
 def _relevance(notes, texts, terms, *, k=1.2, b=0.75, title_weight=3.0):

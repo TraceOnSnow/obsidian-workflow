@@ -4,7 +4,8 @@ import tempfile
 import unittest
 
 from markdown_library import Library
-from markdown_library.note_queries import search_notes
+from markdown_library import LibraryError
+from markdown_library.note_queries import get_notes, search_notes
 
 
 class NoteSearchTests(unittest.TestCase):
@@ -52,6 +53,25 @@ class NoteSearchTests(unittest.TestCase):
         self.assertEqual(first['total'], 2)
         self.assertNotEqual(first['items'][0]['id'], second['items'][0]['id'])
         self.assertIsNone(second['next_offset'])
+
+    def test_multiple_queries_return_one_block_each(self):
+        result = search_notes(self.library, queries=['滑动窗口', 'having', '不存在'])
+        self.assertEqual([r['query'] for r in result['results']], ['滑动窗口', 'having', '不存在'])
+        self.assertEqual([i['title'] for i in result['results'][0]['items']], ['滑动窗口模板', '某次面试'])
+        self.assertEqual([i['title'] for i in result['results'][1]['items']], ['SQL notes'])
+        self.assertEqual(result['results'][2]['total'], 0)
+        for bad in ({'queries': []}, {'queries': ['a'] * 11}, {'query': 'x', 'queries': ['y']}):
+            with self.assertRaises(LibraryError):
+                search_notes(self.library, **bad)
+
+    def test_get_notes_matches_get_and_reports_missing(self):
+        result = get_notes(self.library, [self.window['id'], 'absent', self.other['id'], self.window['id']])
+        self.assertEqual([n['id'] for n in result['notes']], [self.window['id'], self.other['id']])
+        self.assertEqual(result['notes'][0], self.library.get(self.window['id']))
+        self.assertEqual(result['missing'], ['absent'])
+        self.assertEqual(result['deferred'], [])
+        with self.assertRaises(LibraryError):
+            get_notes(self.library, ['x'] * 21)
 
 
 if __name__ == '__main__':

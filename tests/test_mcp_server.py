@@ -38,7 +38,7 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                 init = await session.initialize()
                 self.assertIn('get_workflow', init.instructions)
                 tools = (await session.list_tools()).tools
-                self.assertEqual(len(tools), 12)
+                self.assertEqual(len(tools), 13)
                 self.assertFalse(any('publish' in t.name or 'shell' in t.name for t in tools))
                 self.assertLess(len(json.dumps([t.model_dump(exclude_none=True) for t in tools])), 19000)
                 annotations = {t.name: t.annotations for t in tools}
@@ -121,7 +121,7 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
             async with ClientSession(reader, writer) as session:
                 await session.initialize()
                 self.assertEqual({t.name for t in (await session.list_tools()).tools},
-                    {'get_workflow', 'search_notes', 'get_note', 'note_history', 'note_sources'})
+                    {'get_workflow', 'search_notes', 'get_note', 'get_notes', 'note_history', 'note_sources'})
                 self.assertTrue((await self.call(session, 'get_workflow'))['read_only'])
 
     async def test_pagination_does_not_return_full_corpus(self):

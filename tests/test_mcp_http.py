@@ -169,7 +169,7 @@ class HTTPMCPTests(unittest.IsolatedAsyncioTestCase):
                         self.assertIn('get_workflow', initialized.instructions)
                         self.assertIsNone(session_id())
                         tools = (await session.list_tools()).tools
-                        self.assertEqual(len(tools), 12)
+                        self.assertEqual(len(tools), 13)
                         for tool in tools:
                             data = tool.model_dump(by_alias=True, exclude_none=True)
                             expected = [{'type': 'oauth2', 'scopes': ['library:read', 'library:write']}]
@@ -199,7 +199,7 @@ class HTTPMCPTests(unittest.IsolatedAsyncioTestCase):
         scopes = readonly.state.mcp_server.settings.auth.required_scopes
         self.assertEqual(scopes, ['library:read'])
         tools = await readonly.state.mcp_server.list_tools()
-        self.assertEqual({tool.name for tool in tools}, {'get_workflow', 'search_notes', 'get_note', 'note_history', 'note_sources'})
+        self.assertEqual({tool.name for tool in tools}, {'get_workflow', 'search_notes', 'get_note', 'get_notes', 'note_history', 'note_sources'})
         for tool in tools:
             self.assertEqual(tool.model_dump(by_alias=True)['securitySchemes'],
                 [{'type': 'oauth2', 'scopes': ['library:read']}])
