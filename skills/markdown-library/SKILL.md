@@ -24,7 +24,7 @@ description: 管理明确指定的 Markdown/Obsidian 内容库，维护笔记、
 5. 回读实际保存结果，再报告改动。Agent 自行获取守卫值，不要求用户手工管理哈希。
 6. 稿件从收件箱移入正式目录、或准备／更新发表稿之前，运行 `check ID`（库内规则文件 `config/editorial-checks.json` 存在时）。它只读，报出不符合机械规则的行（禁用说明句、反引号里的数学式、小节别名、发表稿匿名等）；有结果就先改稿再继续，判定为误报时向用户说明而不是忽略。规则本身的增改属于规约变更，按演进流程处理。
 
-已有普通笔记可用 `register PATH` 预览原位纳管，明确执行时携带原文件哈希与 `--apply`。模板、工具配置和导航不作为普通笔记批量纳管。新建笔记用 `create`，上游材料导入用 `import` 及稳定 `--source-id`；重复导入应保留后续用户编辑。
+已有普通笔记可用 `register PATH` 预览原位纳管，明确执行时携带原文件哈希与 `--apply`。模板、工具配置和导航不作为普通笔记批量纳管。新建笔记用 `create`，上游材料导入用 `import` 及稳定 `--source-id`；重复导入应保留后续用户编辑。从聊天档案手工整理进笔记后要登记来源，否则以后增量整理会把该对话当作未处理：新建笔记优先用 `import --source-id`；补进已有笔记用 `cover-source ID --source FILE --expected-hash SHA` 预览（`--schema` 查看来源格式：账号键、会话ID、所覆盖本人消息的ID与 `text_sha256`，可附 decision），再加 `--apply --expected-token TOKEN`；只改来源映射，不改正文。
 
 移动与合并统一用 `organize --schema` 获取请求结构，以 `--request FILE` 或 `--request -` 只读预览，按当前授权加 `--apply --expected-token TOKEN` 执行。移动清单一次最多100篇、共用事务；合并保留来源及可恢复旧稿。CLI的 `move`／`merge` 也支持同一请求流程；MCP用 `organize_notes`。工具自行修复链接、回读并更新相关目录。结果中的正文保存与目录刷新分别判断；目录失败只重试 `navigation --scope FOLDER`，不要重复移动／合并。人工索引及既有Base布局保留，不能因个别索引保留而宣称整批失败。协议和来源续读见[操作说明](../../docs/content-operations.md)。
 
