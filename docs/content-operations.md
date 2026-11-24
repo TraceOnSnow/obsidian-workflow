@@ -194,6 +194,40 @@ so a conversation-driven rule update does not depend on editing a second embedde
 policy or restarting the service. The built-in workflow remains a fallback for a
 new deployment without that policy file.
 
+## Record that an existing note covers a chat source
+
+When chat material is written into a note by hand rather than through the
+pipeline's import, register its source so later incremental runs treat that
+conversation as handled. A new note should prefer `import --source-id`. For an
+existing note, preview and then apply:
+
+```sh
+markdown-library --vault /absolute/vault cover-source --schema
+markdown-library --vault /absolute/vault cover-source NOTE_ID --source covered.json --expected-hash CURRENT_SHA
+markdown-library --vault /absolute/vault cover-source NOTE_ID --source covered.json --expected-hash CURRENT_SHA --apply --expected-token PREVIEW_TOKEN
+```
+
+The source file uses the `chatgpt-source-first-covered-v1` record: `account_key`,
+`conversation_id`, `evidence` (each covered message's `source_message_id`, `role`
+and `text_sha256`, at least one `user`; a workbench `id`/`primary` may be kept),
+and an optional `decision`, `actor` and upstream `input_source`.
+The `source_ref` is derived from the target note, account, conversation and
+evidence, so evidence order does not matter and the same conversation or
+evidence may be registered to several notes, one registration each. Registering
+the same evidence again for the same note is `unchanged`. An earlier record for
+the same note, conversation and evidence set also counts as already registered
+whatever algorithm produced its ref (such as the 2026-11-07 batch, whose ref also
+hashed the upstream source); the result then names it in `matched_source_ref`
+with `legacy_ref: true`. A repeat never rewrites the stored record: when its
+`decision`, `actor`, `input_source` or evidence details differ, the result gives
+`differs_from_existing: true` and the field names in `differing_fields`.
+The preview lists `related_sources`, other registrations naming the same
+conversation or messages, for comparison. A pending interrupted transaction is
+refused until ordinary library recovery has finished. Only the private source mapping
+changes: the note body, path, hash and publication state stay as they are, and
+the mapping is read back after the write. A Post is refused; register the
+private note or Work instead.
+
 ## Find recorded source messages
 
 ```sh

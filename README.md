@@ -11,7 +11,7 @@
 - **独立发表稿**：私人 note／Work 与 Post 分开保存，保留来源和双向入口。修改原稿不会自动覆盖 Post，作品卡片也不会带出私人正文。
 - **同步守卫**：使用当前文件哈希、共同基线和远端版本检查并发修改；双端冲突保留待处理，未知写入先对账，成功回读后才推进基线。扫描缺失不会自动删除网站记录。
 - **MCP 与技能复用**：CLI、stdio MCP 和 Skill 使用同一内容库实现；HTTP MCP 另有 OAuth／PKCE 接入代码。运行服务和连接模型由使用者单独配置。
-- **日常整理入口**：`organize` 按固定 Schema 预览并执行整批移动或合并，自动修复链接、回读并刷新目录；`search`、`sources`、`source-messages` 提供有界查询和来源定位，见[操作说明](docs/content-operations.md)。
+- **日常整理入口**：`organize` 按固定 Schema 预览并执行整批移动或合并，自动修复链接、回读并刷新目录；`search`、`sources`、`source-messages` 提供有界查询和来源定位，`cover-source` 为手工整理进已有笔记的聊天补登来源，见[操作说明](docs/content-operations.md)。
 
 ## 本地试用
 

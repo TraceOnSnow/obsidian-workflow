@@ -50,6 +50,13 @@ def parser():
     messages.add_argument('--limit', type=int, default=10)
     messages.add_argument('--max-chars', type=int, default=20000)
     messages.add_argument('--text-offset', type=int, default=0)
+    cover = commands.add_parser('cover-source', help='Preview/apply recording that an existing note already covers a chat source; body unchanged')
+    cover.add_argument('id', nargs='?')
+    cover.add_argument('--source', help='Covered-source JSON file, or - for stdin')
+    cover.add_argument('--expected-hash', help="The note's current SHA256")
+    cover.add_argument('--schema', action='store_true')
+    cover.add_argument('--apply', action='store_true')
+    cover.add_argument('--expected-token')
     for name in ('organize', 'move', 'merge'):
         command = commands.add_parser(name, help='Preview/apply guarded organization; move accepts a batch')
         command.add_argument('--schema', action='store_true')
@@ -200,6 +207,17 @@ def dispatch(arguments):
         return organize(Library(arguments.vault), json.loads(_read(arguments.request)),
                         apply=arguments.apply, expected_token=arguments.expected_token,
                         operation=None if arguments.command == 'organize' else arguments.command)
+    if arguments.command == 'cover-source':
+        from .source_coverage import REQUEST_SCHEMA, cover_source
+        if arguments.schema:
+            if arguments.id or arguments.source or arguments.apply or arguments.expected_token:
+                raise LibraryError('--schema cannot be combined with an operation')
+            return REQUEST_SCHEMA
+        if not arguments.id or not arguments.source or not arguments.expected_hash:
+            raise LibraryError('cover-source requires an id, --source and --expected-hash, or --schema')
+        return cover_source(Library(arguments.vault), arguments.id, json.loads(_read(arguments.source)),
+                            expected_hash=arguments.expected_hash, apply=arguments.apply,
+                            expected_token=arguments.expected_token)
     if arguments.command == 'navigation':
         from .navigation import refresh_navigation
         if arguments.apply and not arguments.expected_token:
@@ -380,7 +398,7 @@ def main(argv=None):
             return 2
         if arguments.command == 'check' and not output['clean']:
             return 2
-        if arguments.command in {'organize', 'move', 'merge', 'navigation'} and (
+        if arguments.command in {'organize', 'move', 'merge', 'navigation', 'cover-source'} and (
                 output.get('status') == 'needs_review' or output.get('state') == 'needs_review'):
             return 2
         return 0
