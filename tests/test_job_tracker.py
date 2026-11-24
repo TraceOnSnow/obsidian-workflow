@@ -47,6 +47,15 @@ class JobTrackerTests(unittest.TestCase):
         self.assertTrue(updated.rstrip().endswith(END))
         self.assertIn('我自己写的结尾。', updated)
 
+    def test_contact_lines_with_results_do_not_place_a_company(self):
+        markdown = EVENTS.replace('我自己写的结尾。', '- 11-01 戊公司｜沟通 — 没消息；招聘方联系\n'
+                                  '- 11-02 丁公司｜方向｜沟通 — 等结果\n\n我自己写的结尾。')
+        updated, events, problems = regenerate(markdown, as_of='11-19')
+        self.assertEqual(problems, [])
+        summary = updated[updated.index(START):updated.index(END)]
+        self.assertNotIn('戊公司', summary)
+        self.assertIn('- 还在流程里：丁公司', summary)
+
     def test_regenerate_replaces_only_marked_section(self):
         first, _, _ = regenerate(EVENTS, as_of='11-19')
         with_tail = first + '\n作者的帖子\n'

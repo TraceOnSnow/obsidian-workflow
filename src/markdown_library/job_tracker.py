@@ -104,7 +104,8 @@ def summarize(events, *, as_of):
     # several roles that all reached that round are shown as ×N.
     final, furthest = {}, {}
     for application in _applications(events).values():
-        attended = [e for e in application if e['result'] in ATTENDED]
+        # Only interview rounds place a company; contact and assessment lines carry no round.
+        attended = [e for e in application if e['result'] in ATTENDED and e['stage'] in FINAL_LABELS]
         if attended:
             last = max(attended, key=lambda e: (ORDER[e['stage']], e['date']))
             company = last['company']
